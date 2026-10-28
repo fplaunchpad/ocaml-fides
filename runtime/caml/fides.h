@@ -66,6 +66,11 @@ struct fides_entry {
   uint8_t kind;
 };
 
+/* Every function below is hidden: it links statically into the executable but
+   is not exported (OCaml executables are linked with -Wl,-E), so C cannot
+   reach it with dlsym. The pass rejects C that names it. */
+#pragma GCC visibility push(hidden)
+
 /* Decoding: the address a fat pointer denotes. Index 0 words are raw
    addresses and pass through unchanged. */
 uintptr_t __fides_decode(uintptr_t w);
@@ -98,5 +103,7 @@ uintptr_t caml_fides_mint(uintptr_t base, uintptr_t size, enum fides_kind kind);
 void caml_fides_release(uintptr_t w);
 /* Read-only view of an entry, for tests and reports. */
 const struct fides_entry *caml_fides_entry(uint32_t index);
+
+#pragma GCC visibility pop
 
 #endif /* CAML_FIDES_H */
