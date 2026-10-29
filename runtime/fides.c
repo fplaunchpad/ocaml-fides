@@ -76,11 +76,12 @@ static uint8_t fresh_cookie(uint8_t previous)
 
 static const char *const cause_names[] = {
   "accessBounds", "accessCookie", "freeBounds", "freeCookie",
-  "freeNotBase", "freeOCamlHeap", "metaTableFull", "callbackNotOCamlHeap"
+  "freeNotBase", "freeOCamlHeap", "metaTableFull", "callbackNotOCamlHeap",
+  "ocamlScannableWrite", "ocamlMethodSuite", "ocamlStaticWrite"
 };
 
 static const char *const kind_names[] = {
-  "dead", "C heap", "C stack", "C global", "OCaml block"
+  "dead", "C heap", "C stack", "C global", "OCaml block", "OCaml static data"
 };
 
 static void report_entry(char *buf, size_t size, int *len, uint32_t i)
@@ -100,12 +101,8 @@ static void report_entry(char *buf, size_t size, int *len, uint32_t i)
                      (unsigned long)e->size, e->cookie, kind_names[e->kind]);
 }
 
-static void report_and_exit(enum fides_cause cause, const char *action,
-                            uintptr_t w, size_t n, const char *site)
-  __attribute__((noreturn));
-
-static void report_and_exit(enum fides_cause cause, const char *action,
-                            uintptr_t w, size_t n, const char *site)
+void caml_fides_trap(enum fides_cause cause, const char *action,
+                     uintptr_t w, size_t n, const char *site)
 {
   char buf[1024];
   int len = 0;
@@ -163,7 +160,7 @@ uintptr_t caml_fides_mint(uintptr_t base, uintptr_t size,
 {
   init();
   if (queue_count == 0)
-    report_and_exit(FIDES_META_TABLE_FULL, "allocate a metadata entry",
+    caml_fides_trap(FIDES_META_TABLE_FULL, "allocate a metadata entry",
                     base, size, NULL);
   if (straddles(base, size))
     internal_error("object crosses a 2^40 boundary", base, size);
@@ -192,9 +189,20 @@ static void release_index(uint32_t i)
 
 void caml_fides_release(uintptr_t w)
 {
+  if (caml_fides_valid(w))
+    release_index(Fides_index(w));
+}
+
+void caml_fides_release_index(uint32_t index)
+{
+  if (index != 0 && index < FIDES_TABLE_SIZE && table[index].cookie != 0)
+    release_index(index);
+}
+
+int caml_fides_valid(uintptr_t w)
+{
   uint32_t i = Fides_index(w);
-  if (i != 0 && table[i].cookie != 0 && table[i].cookie == Fides_cookie(w))
-    release_index(i);
+  return i != 0 && table[i].cookie != 0 && table[i].cookie == Fides_cookie(w);
 }
 
 const struct fides_entry *caml_fides_entry(uint32_t index)
@@ -217,6 +225,24 @@ void *__fides_decode_ptr(void *p)
   return (void *)__fides_decode((uintptr_t)p);
 }
 
+/* The write restriction (D43, model §D.6.2 p.33), and D10 for static data.
+   It runs only after the access check has passed, so the pointer is live, in
+   bounds and correctly cookied; what it answers is whether untrusted code may
+   write *this* OCaml block at all. The tag comes from the block's header, one
+   word below its base. */
+static void ocaml_write_check(const struct fides_entry *e, uintptr_t a,
+                              uintptr_t w, size_t n, const char *site)
+{
+  uint8_t tag;
+  if (e->kind == FIDES_KIND_OCAML_STATIC)
+    caml_fides_trap(FIDES_OCAML_STATIC_WRITE, "store", w, n, site);
+  tag = Fides_block_tag(e->base);
+  if (tag < FIDES_NO_SCAN_TAG)
+    caml_fides_trap(FIDES_OCAML_SCANNABLE_WRITE, "store", w, n, site);
+  if (tag == FIDES_CUSTOM_TAG && a == e->base)
+    caml_fides_trap(FIDES_OCAML_METHOD_SUITE, "store", w, n, site);
+}
+
 /* accessCheck (model §D.4): the whole access [a, a+n) must lie in the
    entry the pointer's own index names, and the cookies must match. A
    zero-width access touches no byte and is not checked. */
@@ -228,9 +254,11 @@ void *__fides_check_store(void *p, size_t n, const char *site)
   uintptr_t a = (i == 0) ? w : ((e->base & ~FIDES_ADDR_MASK) | Fides_low(w));
   if (n == 0) return (void *)a;
   if (!(a >= e->base && n <= e->size && a - e->base <= e->size - n))
-    report_and_exit(FIDES_ACCESS_BOUNDS, "store", w, n, site);
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, "store", w, n, site);
   if (e->cookie != Fides_cookie(w))
-    report_and_exit(FIDES_ACCESS_COOKIE, "store", w, n, site);
+    caml_fides_trap(FIDES_ACCESS_COOKIE, "store", w, n, site);
+  if (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
+    ocaml_write_check(e, a, w, n, site);
   return (void *)a;
 }
 
@@ -277,13 +305,13 @@ static struct fides_entry *free_check(uintptr_t w, const char *action)
   struct fides_entry *e = &table[i];
   uintptr_t a = (i == 0) ? w : ((e->base & ~FIDES_ADDR_MASK) | Fides_low(w));
   if (!(a >= e->base && a - e->base < e->size))
-    report_and_exit(FIDES_FREE_BOUNDS, action, w, 0, NULL);
+    caml_fides_trap(FIDES_FREE_BOUNDS, action, w, 0, NULL);
   if (e->cookie != Fides_cookie(w))
-    report_and_exit(FIDES_FREE_COOKIE, action, w, 0, NULL);
+    caml_fides_trap(FIDES_FREE_COOKIE, action, w, 0, NULL);
   if (a != e->base)
-    report_and_exit(FIDES_FREE_NOT_BASE, action, w, 0, NULL);
-  if (e->kind == FIDES_KIND_OCAML)
-    report_and_exit(FIDES_FREE_OCAML_HEAP, action, w, 0, NULL);
+    caml_fides_trap(FIDES_FREE_NOT_BASE, action, w, 0, NULL);
+  if (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
+    caml_fides_trap(FIDES_FREE_OCAML_HEAP, action, w, 0, NULL);
   return e;
 }
 

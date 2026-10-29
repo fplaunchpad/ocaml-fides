@@ -818,10 +818,59 @@ and transl_ccall env prim args dbg =
     | Unboxed_integer bi -> (typ_int, box_int dbg bi)
     | Untagged_immediate -> (typ_int, (fun i -> tag_int i dbg))
   in
-  let typ_args, args = transl_args prim.prim_native_repr_args args in
-  wrap_result
-    (Cop(Cextcall(Primitive.native_name prim,
-                  typ_res, typ_args, prim.prim_alloc), args, dbg))
+  let typ_args, cargs = transl_args prim.prim_native_repr_args args in
+  let name = Primitive.native_name prim in
+  (* FIDES sanitizer: open a boundary frame around the call, promote every
+     OCaml block argument, and close the frame on the way back
+     (Implementation/DECISIONS.md D4; model.pdf §D.5). [caml_fides_enter]
+     promotes nothing unless [name] is a sanitized C stub, so calls to the
+     runtime's own primitives are unchanged apart from the three helper
+     calls. A promoted argument is a fat pointer, not an OCaml value, so it
+     is typed [typ_int] and stays out of the frame table. *)
+  let helper n typ_res typ_args args =
+    Cop(Cextcall(n, typ_res, typ_args, false), args, dbg)
+  in
+  let depth = V.create_local "*fides_depth*" in
+  let promote_flags =
+    let rec flags reprs args =
+      match reprs, args with
+      | _, [] -> []
+      | [], _ :: args -> false :: flags [] args
+      | repr :: reprs, _ :: args ->
+          (match repr with Same_as_ocaml_repr -> true | _ -> false)
+          :: flags reprs args
+    in
+    flags prim.prim_native_repr_args cargs
+  in
+  let rec bind_args flags args acc =
+    match flags, args with
+    | [], [] ->
+        let call =
+          Cop(Cextcall(name, typ_res, typ_args, prim.prim_alloc),
+              List.rev acc, dbg)
+        in
+        begin match prim.prim_native_repr_res with
+        | Same_as_ocaml_repr ->
+            wrap_result
+              (helper "caml_fides_leave" typ_val [XInt; XInt]
+                 [Cvar depth; call])
+        | _ ->
+            bind "fides_res" call (fun res ->
+              Csequence
+                (helper "caml_fides_unwind" typ_void [XInt] [Cvar depth],
+                 wrap_result res))
+        end
+    | promote :: flags, arg :: args ->
+        let arg =
+          if promote then helper "caml_fides_promote" typ_int [XInt] [arg]
+          else arg
+        in
+        bind "fides_arg" arg (fun arg -> bind_args flags args (arg :: acc))
+    | _ :: _, [] | [], _ :: _ -> assert false
+  in
+  Clet(VP.create depth,
+       helper "caml_fides_enter" typ_int [XInt] [Cconst_symbol(name, dbg)],
+       bind_args promote_flags cargs [])
 
 and transl_prim_1 env p arg dbg =
   match p with

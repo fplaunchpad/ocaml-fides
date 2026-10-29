@@ -21,6 +21,7 @@
 #include <signal.h>
 #include "caml/alloc.h"
 #include "caml/fail.h"
+#include "caml/fides_ffi.h"
 #include "caml/io.h"
 #include "caml/gc.h"
 #include "caml/memory.h"
@@ -86,6 +87,8 @@ void caml_raise(value v)
   caml_tsan_exit_on_raise_c(exception_pointer);
 #endif
 
+  /* FIDES: the calls this exception abandons lose their entries (D4). */
+  caml_fides_unwind_to_handler(Caml_state->exn_handler);
   caml_raise_exception(Caml_state, v);
 }
 
@@ -175,6 +178,7 @@ void caml_array_bound_error_asm(void)
 
   /* This exception is raised directly from ocamlopt-compiled OCaml,
      not C, so we jump directly to the OCaml handler (and avoid GC) */
+  caml_fides_unwind_to_handler(Caml_state->exn_handler);
   caml_raise_exception(Caml_state, caml_exception_array_bound_error());
 }
 

@@ -1251,6 +1251,7 @@ runtime_NATIVE_ONLY_C_SOURCES = \
   dynlink_nat \
   fail_nat \
   fides \
+  fides_ffi \
   frame_descriptors \
   startup_nat \
   signals_nat
