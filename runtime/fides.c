@@ -77,7 +77,8 @@ static uint8_t fresh_cookie(uint8_t previous)
 static const char *const cause_names[] = {
   "accessBounds", "accessCookie", "freeBounds", "freeCookie",
   "freeNotBase", "freeOCamlHeap", "metaTableFull", "callbackNotOCamlHeap",
-  "ocamlScannableWrite", "ocamlMethodSuite", "ocamlStaticWrite"
+  "ocamlScannableWrite", "ocamlMethodSuite", "ocamlStaticWrite",
+  "rootFrameUnbalanced"
 };
 
 static const char *const kind_names[] = {
@@ -205,6 +206,16 @@ int caml_fides_valid(uintptr_t w)
   return i != 0 && table[i].cookie != 0 && table[i].cookie == Fides_cookie(w);
 }
 
+uint8_t caml_fides_relocate(uint32_t index, uintptr_t new_base)
+{
+  struct fides_entry *e = &table[index];
+  if (straddles(new_base, e->size))
+    internal_error("a moved object crosses a 2^40 boundary", new_base, e->size);
+  e->base = new_base;
+  e->cookie = fresh_cookie(e->cookie);
+  return e->cookie;
+}
+
 const struct fides_entry *caml_fides_entry(uint32_t index)
 {
   return index < FIDES_TABLE_SIZE ? &table[index] : NULL;
@@ -229,36 +240,43 @@ void *__fides_decode_ptr(void *p)
    It runs only after the access check has passed, so the pointer is live, in
    bounds and correctly cookied; what it answers is whether untrusted code may
    write *this* OCaml block at all. The tag comes from the block's header, one
-   word below its base. */
-static void ocaml_write_check(const struct fides_entry *e, uintptr_t a,
-                              uintptr_t w, size_t n, const char *site)
+   word below its base. Returns -1 or the cause. */
+static int ocaml_write_cause(const struct fides_entry *e, uintptr_t a)
 {
   uint8_t tag;
-  if (e->kind == FIDES_KIND_OCAML_STATIC)
-    caml_fides_trap(FIDES_OCAML_STATIC_WRITE, "store", w, n, site);
+  if (e->kind == FIDES_KIND_OCAML_STATIC) return FIDES_OCAML_STATIC_WRITE;
   tag = Fides_block_tag(e->base);
-  if (tag < FIDES_NO_SCAN_TAG)
-    caml_fides_trap(FIDES_OCAML_SCANNABLE_WRITE, "store", w, n, site);
-  if (tag == FIDES_CUSTOM_TAG && a == e->base)
-    caml_fides_trap(FIDES_OCAML_METHOD_SUITE, "store", w, n, site);
+  if (tag < FIDES_NO_SCAN_TAG) return FIDES_OCAML_SCANNABLE_WRITE;
+  if (tag == FIDES_CUSTOM_TAG && a == e->base) return FIDES_OCAML_METHOD_SUITE;
+  return -1;
 }
 
 /* accessCheck (model §D.4): the whole access [a, a+n) must lie in the
-   entry the pointer's own index names, and the cookies must match. A
-   zero-width access touches no byte and is not checked. */
-void *__fides_check_store(void *p, size_t n, const char *site)
+   entry the pointer's own index names, and the cookies must match; then the
+   write restriction. A zero-width access touches no byte and is not
+   checked. */
+int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr)
 {
-  uintptr_t w = (uintptr_t)p;
   uint32_t i = Fides_index(w);
   const struct fides_entry *e = &table[i];
   uintptr_t a = (i == 0) ? w : ((e->base & ~FIDES_ADDR_MASK) | Fides_low(w));
-  if (n == 0) return (void *)a;
+  *addr = a;
+  if (n == 0) return -1;
   if (!(a >= e->base && n <= e->size && a - e->base <= e->size - n))
-    caml_fides_trap(FIDES_ACCESS_BOUNDS, "store", w, n, site);
+    return FIDES_ACCESS_BOUNDS;
   if (e->cookie != Fides_cookie(w))
-    caml_fides_trap(FIDES_ACCESS_COOKIE, "store", w, n, site);
+    return FIDES_ACCESS_COOKIE;
   if (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
-    ocaml_write_check(e, a, w, n, site);
+    return ocaml_write_cause(e, a);
+  return -1;
+}
+
+void *__fides_check_store(void *p, size_t n, const char *site)
+{
+  uintptr_t a;
+  int cause = caml_fides_store_cause((uintptr_t)p, n, &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, "store", (uintptr_t)p, n, site);
   return (void *)a;
 }
 

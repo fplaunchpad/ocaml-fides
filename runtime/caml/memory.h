@@ -559,6 +559,151 @@ struct caml__roots_block {
 
 #define End_roots() CAML_LOCAL_ROOTS = caml__roots_block.next; }
 
+/* FIDES sanitizer (Implementation/DECISIONS.md D12).
+
+   The functions below are the root-registration interface for C compiled
+   with the sanitizer. Each one checks that the slots it is given are memory
+   the caller may write, keeps them in the runtime's own memory, and lets the
+   collector update them: the collector decodes a tagged word in a slot, and
+   when it moves the block it moves the word's entry too, with a fresh
+   cookie.
+
+   Sanitized C is compiled with -DCAML_FIDES, which routes the root macros and
+   the global-root functions through them. The stock macros store into
+   Caml_state->local_roots from C, which the sanitizer refuses, so a stub
+   built with the sanitizer but without the flag traps at its first
+   CAMLparam (fail closed); the pass rejects direct calls to the stock
+   global-root functions. */
+
+CAMLextern intnat caml_checked_roots_mark (void);
+CAMLextern void caml_checked_roots_register (value *, intnat);
+CAMLextern void caml_checked_roots_restore (intnat);
+CAMLextern void caml_checked_register_global_root (value *);
+CAMLextern void caml_checked_remove_global_root (value *);
+CAMLextern void caml_checked_register_generational_global_root (value *);
+CAMLextern void caml_checked_remove_generational_global_root (value *);
+CAMLextern void caml_checked_modify_generational_global_root (value *, value);
+
+#ifdef CAML_FIDES
+
+/* A root frame is a mark: how many local roots were registered when it was
+   opened. CAMLdrop releases back to it. */
+#undef CAMLparam0
+#define CAMLparam0()                                                    \
+  intnat caml__frame =                                                  \
+    (DO_CHECK_CAML_STATE ? Caml_check_caml_state() : (void)0,           \
+     caml_checked_roots_mark())
+
+#undef CAMLxparam1
+#define CAMLxparam1(x) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparam2
+#define CAMLxparam2(x, y) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x), 1), \
+    caml_checked_roots_register(&(y), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparam3
+#define CAMLxparam3(x, y, z) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x), 1), \
+    caml_checked_roots_register(&(y), 1), \
+    caml_checked_roots_register(&(z), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparam4
+#define CAMLxparam4(x, y, z, t) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x), 1), \
+    caml_checked_roots_register(&(y), 1), \
+    caml_checked_roots_register(&(z), 1), \
+    caml_checked_roots_register(&(t), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparam5
+#define CAMLxparam5(x, y, z, t, u) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x), 1), \
+    caml_checked_roots_register(&(y), 1), \
+    caml_checked_roots_register(&(z), 1), \
+    caml_checked_roots_register(&(t), 1), \
+    caml_checked_roots_register(&(u), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparamN
+#define CAMLxparamN(x, size) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x[0]), (size)), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLxparamresult
+#define CAMLxparamresult(x) \
+  CAMLunused_start int caml__dummy_##x = ( \
+    caml_checked_roots_register(&(x.data), 1), \
+    0) \
+  CAMLunused_end
+
+#undef CAMLdrop
+#define CAMLdrop do{ \
+  caml_checked_roots_restore(caml__frame); \
+}while (0)
+
+/* The legacy Begin_roots/End_roots pairs. */
+#define Caml_fides_begin_roots \
+  { intnat caml__roots_mark = caml_checked_roots_mark();
+
+#undef Begin_roots1
+#define Begin_roots1(r0) Caml_fides_begin_roots \
+  caml_checked_roots_register(&(r0), 1);
+#undef Begin_roots2
+#define Begin_roots2(r0, r1) Caml_fides_begin_roots \
+  caml_checked_roots_register(&(r0), 1); \
+  caml_checked_roots_register(&(r1), 1);
+#undef Begin_roots3
+#define Begin_roots3(r0, r1, r2) Caml_fides_begin_roots \
+  caml_checked_roots_register(&(r0), 1); \
+  caml_checked_roots_register(&(r1), 1); \
+  caml_checked_roots_register(&(r2), 1);
+#undef Begin_roots4
+#define Begin_roots4(r0, r1, r2, r3) Caml_fides_begin_roots \
+  caml_checked_roots_register(&(r0), 1); \
+  caml_checked_roots_register(&(r1), 1); \
+  caml_checked_roots_register(&(r2), 1); \
+  caml_checked_roots_register(&(r3), 1);
+#undef Begin_roots5
+#define Begin_roots5(r0, r1, r2, r3, r4) Caml_fides_begin_roots \
+  caml_checked_roots_register(&(r0), 1); \
+  caml_checked_roots_register(&(r1), 1); \
+  caml_checked_roots_register(&(r2), 1); \
+  caml_checked_roots_register(&(r3), 1); \
+  caml_checked_roots_register(&(r4), 1);
+#undef Begin_roots_block
+#define Begin_roots_block(table, size) Caml_fides_begin_roots \
+  caml_checked_roots_register((table), (size));
+#undef End_roots
+#define End_roots() caml_checked_roots_restore(caml__roots_mark); }
+
+#define caml_register_global_root caml_checked_register_global_root
+#define caml_remove_global_root caml_checked_remove_global_root
+#define caml_register_generational_global_root \
+  caml_checked_register_generational_global_root
+#define caml_remove_generational_global_root \
+  caml_checked_remove_generational_global_root
+#define caml_modify_generational_global_root \
+  caml_checked_modify_generational_global_root
+
+#endif /* CAML_FIDES */
+
 
 /* [caml_register_global_root] registers a global C variable as a memory root
    for the duration of the program, or until [caml_remove_global_root] is

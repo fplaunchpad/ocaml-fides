@@ -51,7 +51,12 @@ enum fides_cause {
   FIDES_OCAML_METHOD_SUITE,
   /* D10: OCaml's static data is readable by C but never writable. The Lean
      has no cause for this, because it has no static data. */
-  FIDES_OCAML_STATIC_WRITE
+  FIDES_OCAML_STATIC_WRITE,
+  /* D12: C returned to OCaml with GC roots still registered, or released
+     root frames that were not its own. The nearest Lean cause is
+     stackMetaUnbalanced (a cross-compartment return with live stack
+     objects); the Lean has no root-frame stack, so it has no cause for this. */
+  FIDES_ROOT_FRAME_UNBALANCED
 };
 
 /* OCaml's own header constants, repeated here so this file builds without the
@@ -102,6 +107,12 @@ void *__fides_decode_ptr(void *p);
    traps otherwise. [site] is a "file:line:function" string or NULL. */
 void *__fides_check_store(void *p, size_t n, const char *site);
 
+/* The same check, without trapping: returns -1 if C may store [n] bytes
+   through [w] and the cause it would trap with otherwise. On success,
+   [*addr] is the address the store would reach. For trusted code that
+   stores on C's behalf (D12: the GC updating a registered root). */
+int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr);
+
 /* halloc / hfree (model §D.4.2) for C heap objects. */
 void *__fides_malloc(size_t n);
 void *__fides_calloc(size_t nmemb, size_t size);
@@ -132,6 +143,10 @@ uintptr_t caml_fides_mint(uintptr_t base, uintptr_t size, enum fides_kind kind);
 void caml_fides_release(uintptr_t w);
 /* Zero an entry by index. The caller is trusted runtime code. */
 void caml_fides_release_index(uint32_t index);
+/* The collector moved the object entry [index] describes: give the entry
+   its new Base and a fresh cookie (D54), and return that cookie. Words that
+   still carry the old cookie no longer validate. */
+uint8_t caml_fides_relocate(uint32_t index, uintptr_t new_base);
 /* Read-only view of an entry, for tests and reports. */
 const struct fides_entry *caml_fides_entry(uint32_t index);
 

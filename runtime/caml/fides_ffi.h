@@ -15,6 +15,7 @@
 
 #include "caml/fides.h"
 #include "caml/mlvalues.h"
+#include "caml/roots.h"
 
 #pragma GCC visibility push(hidden)
 
@@ -27,6 +28,12 @@ void caml_fides_unwind(intnat d);
 
 /* The raise path: release the frames of the calls an exception abandons. */
 void caml_fides_unwind_to_handler(void *handler);
+
+/* The collector's scan of the roots the sanitizer keeps (D12): promoted
+   arguments and the slots sanitized C registered. Moves entries with their
+   blocks and rewrites the registered slots. */
+void caml_fides_scan_roots(scanning_action f, scanning_action_flags flags,
+                           void *fdata);
 
 /* Is this address inside OCaml's static data (D10)? */
 int caml_fides_in_static_data(uintptr_t a);

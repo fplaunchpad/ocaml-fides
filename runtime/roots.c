@@ -28,6 +28,9 @@
 #include "caml/major_gc.h"
 #include "caml/shared_heap.h"
 #include "caml/fiber.h"
+#ifdef NATIVE_CODE
+#include "caml/fides_ffi.h"
+#endif
 
 CAMLexport _Atomic scan_roots_hook caml_scan_roots_hook =
   (scan_roots_hook)NULL;
@@ -40,6 +43,10 @@ void caml_do_roots (
   scan_roots_hook hook;
   caml_do_local_roots(f, fflags, fdata,
                       d->local_roots, d->current_stack, d->gc_regs);
+  /* FIDES: the roots sanitized C registered, and promoted arguments (D12). */
+#ifdef NATIVE_CODE
+  caml_fides_scan_roots(f, fflags, fdata);
+#endif
   hook = atomic_load(&caml_scan_roots_hook);
   if (hook != NULL) (*hook)(f, fflags, fdata, d);
   caml_final_do_roots(f, fflags, fdata, d, do_final_val);

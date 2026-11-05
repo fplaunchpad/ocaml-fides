@@ -33,6 +33,9 @@
 #include "caml/memory.h"
 #include "caml/memprof.h"
 #include "caml/minor_gc.h"
+#ifdef NATIVE_CODE
+#include "caml/fides_ffi.h"
+#endif
 #include "caml/misc.h"
 #include "caml/mlvalues.h"
 #include "caml/platform.h"
@@ -656,6 +659,11 @@ caml_empty_minor_heap_promote(caml_domain_state* domain,
   caml_do_local_roots(
     &oldify_one, oldify_scanning_flags, &st,
     domain->local_roots, domain->current_stack, domain->gc_regs);
+
+  /* FIDES: the roots sanitized C registered, and promoted arguments (D12). */
+#ifdef NATIVE_CODE
+  caml_fides_scan_roots(&oldify_one, oldify_scanning_flags, &st);
+#endif
 
   scan_roots_hook = atomic_load(&caml_scan_roots_hook);
   if (scan_roots_hook != NULL)

@@ -23,7 +23,12 @@
 
    and `caml_raise` calls caml_fides_unwind_to_handler for the calls an
    exception abandons. Ending an activation, however it ends, also releases
-   the stack-object entries of its C frames that never ran their exits. */
+   the stack-object entries of its C frames that never ran their exits.
+
+   It also keeps the GC roots that sanitized C registers (D12): `CAMLparam`,
+   `CAMLlocal` and the global-root functions reach the runtime through the
+   `caml_checked_*` functions below, and the collector scans them with
+   caml_fides_scan_roots. */
 
 #define CAML_INTERNALS
 
@@ -33,6 +38,7 @@
 #include "caml/domain_state.h"
 #include "caml/memory.h"
 #include "caml/misc.h"
+#include "caml/roots.h"
 #include "caml/fides_ffi.h"
 
 /* Bounds of the sanitized C code, from the section the pass puts it in.
@@ -91,39 +97,306 @@ static int in_sanitized_c(void *fn)
 #define FIDES_MAX_DEPTH    512
 #define FIDES_FRAME_INLINE 8
 
+/* One promoted argument: the entry, and the OCaml value it was minted for.
+   The value is a GC root (D12): when the collector moves the block, the
+   entry moves with it. */
+struct promoted {
+  value v;
+  uint16_t idx;
+};
+
 struct bframe {
-  uint16_t idx[FIDES_FRAME_INLINE];
-  uint16_t *more;           /* overflow, or NULL */
+  struct promoted inl[FIDES_FRAME_INLINE];
+  struct promoted *more;    /* overflow, or NULL */
   int n, cap;
   int promoting;            /* the target is sanitized C */
   void *handler;            /* Caml_state->exn_handler at entry */
+  intnat root_base;         /* registered local roots at entry */
   size_t stack_base;        /* stack-object log height at entry */
 };
 
 static struct bframe frames[FIDES_MAX_DEPTH];
 static intnat depth;
 
-static void record(struct bframe *f, uint16_t index)
+static struct promoted *promoted_of(struct bframe *f)
+{
+  return f->more != NULL ? f->more : f->inl;
+}
+
+static void record(struct bframe *f, uint16_t index, value v)
 {
   if (f->n == f->cap) {
     int cap = f->cap * 2;
-    uint16_t *more = caml_stat_alloc_noexc(cap * sizeof(uint16_t));
+    struct promoted *more =
+      caml_stat_alloc_noexc(cap * sizeof(struct promoted));
     if (more == NULL)
       caml_fatal_error("FIDES: out of memory recording a boundary frame");
-    memcpy(more, f->more != NULL ? (void *)f->more : (void *)f->idx,
-           f->n * sizeof(uint16_t));
+    memcpy(more, promoted_of(f), f->n * sizeof(struct promoted));
     caml_stat_free(f->more);
     f->more = more;
     f->cap = cap;
   }
-  (f->more != NULL ? f->more : f->idx)[f->n++] = index;
+  promoted_of(f)[f->n].idx = index;
+  promoted_of(f)[f->n].v = v;
+  f->n++;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Registered roots (D12)                                                 */
+
+/* A registered slot range: [n] values starting at [slot], kept as the
+   tagged address C passed, so that the collector's store into it is
+   checked against the slot's own entry every time (a slot whose frame or
+   block has died traps instead of being written). */
+struct root {
+  uintptr_t slot;
+  intnat n;
+};
+
+struct roots {
+  struct root *v;
+  intnat n, cap;
+};
+
+/* Local roots (CAMLparam/CAMLlocal) form a stack; a root frame is a mark,
+   the stack height when it was opened. Global roots are an unordered set. */
+static struct roots locals, globals;
+
+static void push_root(struct roots *r, uintptr_t slot, intnat n)
+{
+  if (r->n == r->cap) {
+    intnat cap = r->cap == 0 ? 64 : r->cap * 2;
+    struct root *v = caml_stat_resize_noexc(r->v, cap * sizeof(struct root));
+    if (v == NULL)
+      caml_fatal_error("FIDES: out of memory registering a GC root");
+    r->v = v;
+    r->cap = cap;
+  }
+  r->v[r->n].slot = slot;
+  r->v[r->n].n = n;
+  r->n++;
+}
+
+/* Registering a slot is a promise that the collector may write it, so the
+   slot must be memory C itself may write (D12): the access check and the
+   write restriction, on the tagged address C passed. */
+static void check_slot(uintptr_t slot, intnat n, const char *action)
+{
+  uintptr_t a;
+  int cause;
+  if (n < 0)
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, action, slot, 0, NULL);
+  cause = caml_fides_store_cause(slot, (size_t)n * sizeof(value), &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, action, slot,
+                    (size_t)n * sizeof(value), NULL);
+}
+
+/* The lowest mark the current C activation may restore: the roots below it
+   belong to an activation suspended in a callback. */
+static intnat root_floor(void)
+{
+  return depth > 0 ? frames[depth - 1].root_base : 0;
+}
+
+CAMLexport intnat caml_checked_roots_mark(void)
+{
+  return locals.n;
+}
+
+CAMLexport void caml_checked_roots_register(value *slots, intnat n)
+{
+  check_slot((uintptr_t)slots, n, "register a local GC root");
+  push_root(&locals, (uintptr_t)slots, n);
+}
+
+/* CAMLdrop: release every root registered since [mark]. Releasing a frame
+   that is not this activation's, or one already released, traps. */
+CAMLexport void caml_checked_roots_restore(intnat mark)
+{
+  if (mark < root_floor() || mark > locals.n)
+    caml_fides_trap(FIDES_ROOT_FRAME_UNBALANCED,
+                    "release a root frame that is not the caller's",
+                    0, 0, NULL);
+  locals.n = mark;
+}
+
+/* Global roots. The generational and plain variants differ only in how the
+   stock collector scans them; these are all scanned at every collection. */
+
+static intnat find_global(uintptr_t addr)
+{
+  for (intnat i = globals.n - 1; i >= 0; i--)
+    if (__fides_decode(globals.v[i].slot) == addr) return i;
+  return -1;
+}
+
+CAMLexport void caml_checked_register_global_root(value *r)
+{
+  check_slot((uintptr_t)r, 1, "register a global GC root");
+  push_root(&globals, (uintptr_t)r, 1);
+}
+
+CAMLexport void caml_checked_remove_global_root(value *r)
+{
+  intnat i = find_global(__fides_decode((uintptr_t)r));
+  if (i < 0) return;                  /* as the stock function: no-op */
+  globals.v[i] = globals.v[--globals.n];
+}
+
+CAMLexport void caml_checked_register_generational_global_root(value *r)
+{
+  caml_checked_register_global_root(r);
+}
+
+CAMLexport void caml_checked_remove_generational_global_root(value *r)
+{
+  caml_checked_remove_global_root(r);
+}
+
+CAMLexport void caml_checked_modify_generational_global_root(value *r,
+                                                             value newval)
+{
+  uintptr_t a;
+  int cause = caml_fides_store_cause((uintptr_t)r, sizeof(value), &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, "modify a global GC root",
+                    (uintptr_t)r, sizeof(value), NULL);
+  *(value *)a = newval;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Scanning (D12, D54)                                                    */
+
+/* Several roots can carry the same entry: the boundary frame's promoted
+   value, and C slots holding copies of the argument. The first one the scan
+   reaches moves the entry and draws its fresh cookie; the others still
+   carry the old cookie, so the scan remembers, per entry, what it changed
+   in the current pass. */
+static uint32_t scan_pass;
+static uint32_t moved_pass[FIDES_TABLE_SIZE];
+static uint8_t moved_old_cookie[FIDES_TABLE_SIZE];
+static uintptr_t moved_old_base[FIDES_TABLE_SIZE];
+
+/* Pass the block [v] (a raw address) to the collector's action and, if the
+   collector moved it, move entry [i] too. Returns the block's address
+   after the action. */
+static value scan_block(scanning_action f, void *fdata, uint32_t i, value v)
+{
+  value nv = v;
+  f(fdata, v, &nv);
+  if (nv != v) {
+    const struct fides_entry *e = caml_fides_entry(i);
+    uintptr_t old_base = e->base;
+    uint8_t old_cookie = e->cookie;
+    caml_fides_relocate(i, (uintptr_t)(old_base + (nv - v)));
+    moved_pass[i] = scan_pass;
+    moved_old_cookie[i] = old_cookie;
+    moved_old_base[i] = old_base;
+  }
+  return nv;
+}
+
+/* Where in its block the promoted pointer of each OCaml entry points: 0 for
+   a block, the infix offset for a function inside a closure (D4 mints over
+   the whole closure). Set at promotion; the scan never reads moved memory
+   to recover it. */
+static uintptr_t promoted_offset[FIDES_TABLE_SIZE];
+
+/* Does a root word at offset [off] into entry [e] name the value the entry
+   was minted for? The model's callbackOk requires the block base exactly
+   (Step/FFI.lean:229); the infix case is ours, since promotion hands C the
+   infix address. Any other offset is an interior pointer the collector
+   cannot follow. */
+static int names_block(uint32_t i, const struct fides_entry *e, uintptr_t off)
+{
+  return (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
+         && off == promoted_offset[i];
+}
+
+/* One registered slot. */
+static void scan_slot(scanning_action f, void *fdata, uintptr_t slot)
+{
+  uintptr_t a, w;
+  int cause = caml_fides_store_cause(slot, sizeof(value), &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause,
+                    "collector update of a registered GC root", slot,
+                    sizeof(value), NULL);
+  w = *(uintptr_t *)a;
+  if (w == 0 || Is_long((value)w)) return;
+  uint32_t i = Fides_index(w);
+  if (i == 0) {                       /* a bare block: the stock root */
+    f(fdata, (value)w, (value *)a);
+    return;
+  }
+  const struct fides_entry *e = caml_fides_entry(i);
+  if (moved_pass[i] == scan_pass && e->cookie != 0
+      && Fides_cookie(w) == moved_old_cookie[i]) {
+    /* An earlier root of this pass already moved the entry: this word still
+       describes the old location. */
+    uintptr_t old = (moved_old_base[i] & ~FIDES_ADDR_MASK) | Fides_low(w);
+    uintptr_t off = old - moved_old_base[i];
+    if (old < moved_old_base[i] || !names_block(i, e, off))
+      caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP,
+                      "collector scan of a GC root", w, 0, NULL);
+    *(uintptr_t *)a = Fides_pack(i, e->cookie, e->base + off);
+    return;
+  }
+  /* A root word the collector cannot use (D12). */
+  if (e->cookie == 0)
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, "collector scan of a GC root", w, 0,
+                    NULL);
+  if (e->cookie != Fides_cookie(w))
+    caml_fides_trap(FIDES_ACCESS_COOKIE, "collector scan of a GC root", w, 0,
+                    NULL);
+  uintptr_t v = __fides_decode(w);
+  if (v < e->base || !names_block(i, e, v - e->base))
+    caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP,
+                    "collector scan of a GC root", w, 0, NULL);
+  value nv = scan_block(f, fdata, i, (value)v);
+  if (nv != (value)v)
+    *(uintptr_t *)a = Fides_pack(i, e->cookie, (uintptr_t)nv);
+}
+
+static void scan_roots(scanning_action f, void *fdata, struct roots *r)
+{
+  for (intnat k = 0; k < r->n; k++)
+    for (intnat j = 0; j < r->v[k].n; j++)
+      scan_slot(f, fdata, r->v[k].slot + j * sizeof(value));
+}
+
+/* Called by the collector wherever it scans the domain's local roots
+   (roots.c caml_do_roots, minor_gc.c), so on every minor collection, at the
+   start of each major marking cycle, and when compaction updates roots. */
+void caml_fides_scan_roots(scanning_action f, scanning_action_flags flags,
+                           void *fdata)
+{
+  (void)flags;
+  if (++scan_pass == 0) {             /* wrapped: forget every old pass */
+    memset(moved_pass, 0, sizeof moved_pass);
+    scan_pass = 1;
+  }
+  /* Promoted arguments first, so that their entries follow their blocks
+     even when the stub roots nothing. */
+  for (intnat d = 0; d < depth; d++) {
+    struct bframe *fr = &frames[d];
+    struct promoted *p = promoted_of(fr);
+    for (int k = 0; k < fr->n; k++)
+      p[k].v = scan_block(f, fdata, p[k].idx, p[k].v);
+  }
+  scan_roots(f, fdata, &locals);
+  scan_roots(f, fdata, &globals);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Entering and leaving                                                   */
 
 /* Release everything the frame minted (D4: the entries die with the frame). */
 static void drop(struct bframe *f)
 {
-  uint16_t *v = f->more != NULL ? f->more : f->idx;
-  for (int i = 0; i < f->n; i++) caml_fides_release_index(v[i]);
+  struct promoted *p = promoted_of(f);
+  for (int i = 0; i < f->n; i++) caml_fides_release_index(p[i].idx);
   caml_stat_free(f->more);
   f->more = NULL;
   f->n = 0;
@@ -142,6 +415,7 @@ intnat caml_fides_enter(void *fn)
   f->cap = FIDES_FRAME_INLINE;
   f->promoting = in_sanitized_c(fn);
   f->handler = Caml_state->exn_handler;
+  f->root_base = locals.n;
   f->stack_base = caml_fides_stack_height();
   caml_fides_stack_set_floor(f->stack_base);
   return depth++;
@@ -169,7 +443,8 @@ value caml_fides_promote(value v)
   w = caml_fides_mint(base, size,
                       caml_fides_in_static_data(base) ? FIDES_KIND_OCAML_STATIC
                                                       : FIDES_KIND_OCAML);
-  record(f, (uint16_t)Fides_index(w));
+  record(f, (uint16_t)Fides_index(w), v);
+  promoted_offset[Fides_index(w)] = (uintptr_t)v - base;
   return (value)Fides_pack(Fides_index(w), Fides_cookie(w), (uintptr_t)v);
 }
 
@@ -183,12 +458,24 @@ static void unwind_to(intnat d)
   caml_fides_stack_set_floor(d > 0 ? frames[d - 1].stack_base : 0);
 }
 
+/* A C activation must release its root frames before it returns (D12):
+   otherwise the runtime would keep slots of a frame that no longer exists.
+   Stock OCaml leaves this undefined; it traps here. */
+static void check_balanced(intnat d)
+{
+  if (locals.n != frames[d].root_base)
+    caml_fides_trap(FIDES_ROOT_FRAME_UNBALANCED,
+                    "return to OCaml with GC roots still registered",
+                    0, 0, NULL);
+}
+
 /* Close the boundary frames down to [d] and hand [res] back to OCaml.
    A tagged result is demoted (its tag stripped); the full callbackOk check
    is Stage 4, so a bare block still passes. */
 value caml_fides_leave(intnat d, value res)
 {
   value out = res;
+  check_balanced(d);
   if (Is_block(res) && Fides_index((uintptr_t)res) != 0) {
     if (!caml_fides_valid((uintptr_t)res))
       caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP, "return a value to OCaml",
@@ -202,16 +489,20 @@ value caml_fides_leave(intnat d, value res)
 /* Same, for a call whose result is not an OCaml value. */
 void caml_fides_unwind(intnat d)
 {
+  check_balanced(d);
   unwind_to(d);
 }
 
 /* The raise path. An exception abandons every call entered since the handler
    that is about to receive it was installed: those frames recorded that
    handler, or a deeper one. Trap pointers live on the fiber stack, which
-   grows down, so "deeper" is a lower address. */
+   grows down, so "deeper" is a lower address. The abandoned activations'
+   root frames go with them, as caml_raise does for the stock local roots. */
 void caml_fides_unwind_to_handler(void *handler)
 {
   intnat d = depth;
   while (d > 0 && (char *)frames[d - 1].handler <= (char *)handler) d--;
+  if (d == depth) return;
+  locals.n = frames[d].root_base;
   unwind_to(d);
 }
