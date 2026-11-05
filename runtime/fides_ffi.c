@@ -231,10 +231,18 @@ static intnat find_global(uintptr_t addr)
   return -1;
 }
 
+/* One record per address, as in the stock registry, where registering an
+   address that is already there only updates it (skiplist.c:138): one
+   removal then unregisters it however often it was registered. The record
+   keeps the latest tagged address, in case the memory was freed and
+   reallocated in between. */
 CAMLexport void caml_checked_register_global_root(value *r)
 {
+  intnat i;
   check_slot((uintptr_t)r, 1, "register a global GC root");
-  push_root(&globals, (uintptr_t)r, 1);
+  i = find_global(__fides_decode((uintptr_t)r));
+  if (i >= 0) globals.v[i].slot = (uintptr_t)r;
+  else push_root(&globals, (uintptr_t)r, 1);
 }
 
 CAMLexport void caml_checked_remove_global_root(value *r)
