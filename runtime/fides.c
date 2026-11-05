@@ -365,9 +365,36 @@ void *__fides_realloc(void *p, size_t n)
 /* ---------------------------------------------------------------------- */
 /* Stack objects, globals, errno                                          */
 
+/* The stack-object log: every salloc'd word, in order. A C frame that an
+   exception or a longjmp abandons never runs its sfree calls, so its
+   entries would stay live over dead stack memory. The boundary (fides_ffi.c)
+   records the log height when a C activation starts, and releases whatever
+   is left above it when the activation ends, however it ends.
+
+   sfree pops dead words off the top, but never below the floor: the words
+   under it belong to an activation suspended in a callback, and the height
+   recorded for that activation must keep naming the same position. */
+static uintptr_t *stack_log;
+static size_t stack_top, stack_cap, stack_floor;
+
+static int live_stack_word(uintptr_t w)
+{
+  return caml_fides_valid(w) && table[Fides_index(w)].kind == FIDES_KIND_C_STACK;
+}
+
 void *__fides_salloc(void *addr, size_t n)
 {
-  return (void *)caml_fides_mint((uintptr_t)addr, n, FIDES_KIND_C_STACK);
+  uintptr_t w = caml_fides_mint((uintptr_t)addr, n, FIDES_KIND_C_STACK);
+  if (stack_top == stack_cap) {
+    size_t cap = stack_cap == 0 ? 1024 : stack_cap * 2;
+    uintptr_t *log = realloc(stack_log, cap * sizeof(uintptr_t));
+    if (log == NULL) internal_error("out of memory logging a stack object",
+                                    (uintptr_t)addr, n);
+    stack_log = log;
+    stack_cap = cap;
+  }
+  stack_log[stack_top++] = w;
+  return (void *)w;
 }
 
 /* Inserted by the pass at every exit of the owning frame. The object may
@@ -376,6 +403,31 @@ void *__fides_salloc(void *addr, size_t n)
 void __fides_sfree(void *p)
 {
   caml_fides_release((uintptr_t)p);
+  while (stack_top > stack_floor && !live_stack_word(stack_log[stack_top - 1]))
+    stack_top--;
+}
+
+size_t caml_fides_stack_height(void)
+{
+  return stack_top;
+}
+
+void caml_fides_stack_set_floor(size_t floor)
+{
+  stack_floor = floor;
+}
+
+/* Release every stack object logged above [mark], and forget them. Only
+   words that still name a live stack entry are released: an index that was
+   freed and reissued to a heap or global object is not the logged object.
+   (A reissue to another stack object was itself logged after this word, so
+   it is above [mark] too.) */
+void caml_fides_stack_unwind(size_t mark)
+{
+  while (stack_top > mark) {
+    uintptr_t w = stack_log[--stack_top];
+    if (live_stack_word(w)) release_index(Fides_index(w));
+  }
 }
 
 void *__fides_global(void *addr, size_t n)

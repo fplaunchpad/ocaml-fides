@@ -22,7 +22,8 @@
        return caml_fides_leave(d, r);
 
    and `caml_raise` calls caml_fides_unwind_to_handler for the calls an
-   exception abandons. */
+   exception abandons. Ending an activation, however it ends, also releases
+   the stack-object entries of its C frames that never ran their exits. */
 
 #define CAML_INTERNALS
 
@@ -96,6 +97,7 @@ struct bframe {
   int n, cap;
   int promoting;            /* the target is sanitized C */
   void *handler;            /* Caml_state->exn_handler at entry */
+  size_t stack_base;        /* stack-object log height at entry */
 };
 
 static struct bframe frames[FIDES_MAX_DEPTH];
@@ -140,6 +142,8 @@ intnat caml_fides_enter(void *fn)
   f->cap = FIDES_FRAME_INLINE;
   f->promoting = in_sanitized_c(fn);
   f->handler = Caml_state->exn_handler;
+  f->stack_base = caml_fides_stack_height();
+  caml_fides_stack_set_floor(f->stack_base);
   return depth++;
 }
 
@@ -169,9 +173,14 @@ value caml_fides_promote(value v)
   return (value)Fides_pack(Fides_index(w), Fides_cookie(w), (uintptr_t)v);
 }
 
+/* End the activations above [d]: their promoted entries, and the stack
+   objects of any of their C frames that did not run their exits. */
 static void unwind_to(intnat d)
 {
+  if (depth <= d) return;
+  caml_fides_stack_unwind(frames[d].stack_base);
   while (depth > d) drop(&frames[--depth]);
+  caml_fides_stack_set_floor(d > 0 ? frames[d - 1].stack_base : 0);
 }
 
 /* Close the boundary frames down to [d] and hand [res] back to OCaml.
@@ -202,6 +211,7 @@ void caml_fides_unwind(intnat d)
    grows down, so "deeper" is a lower address. */
 void caml_fides_unwind_to_handler(void *handler)
 {
-  while (depth > 0 && (char *)frames[depth - 1].handler <= (char *)handler)
-    drop(&frames[--depth]);
+  intnat d = depth;
+  while (d > 0 && (char *)frames[d - 1].handler <= (char *)handler) d--;
+  unwind_to(d);
 }

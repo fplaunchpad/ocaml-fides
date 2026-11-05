@@ -112,6 +112,14 @@ void __fides_free(void *p);
 void *__fides_salloc(void *addr, size_t n);
 void __fides_sfree(void *p);
 
+/* The stack-object log (runtime/fides.c): its height, the floor sfree may not
+   pop below, and the release of everything logged above a height. The
+   boundary uses them so that a C activation's stack entries end with it,
+   even when an exception abandons its frames. */
+size_t caml_fides_stack_height(void);
+void caml_fides_stack_set_floor(size_t floor);
+void caml_fides_stack_unwind(size_t mark);
+
 /* Entries for C globals, live for the whole run (model §I.4). */
 void *__fides_global(void *addr, size_t n);
 
