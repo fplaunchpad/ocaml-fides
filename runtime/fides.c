@@ -438,6 +438,18 @@ void __fides_sfree(void *p)
     stack_top--;
 }
 
+void __fides_stack_restore(void *sp)
+{
+  while (stack_top > stack_floor) {
+    uintptr_t w = stack_log[stack_top - 1];
+    if (live_stack_word(w)) {
+      if (table[Fides_index(w)].base >= (uintptr_t)sp) break;
+      release_index(Fides_index(w));
+    }
+    stack_top--;
+  }
+}
+
 size_t caml_fides_stack_height(void)
 {
   return stack_top;

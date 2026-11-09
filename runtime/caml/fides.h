@@ -137,6 +137,13 @@ size_t caml_fides_stack_height(void);
 void caml_fides_stack_set_floor(size_t floor);
 void caml_fides_stack_unwind(size_t mark);
 
+/* Inserted by the pass where a function's dynamic stack objects (VLAs,
+   allocas outside the entry block) die: before each llvm.stackrestore, with
+   the stack pointer being restored, and before each return, with the stack
+   pointer at entry. Releases the live stack objects at the top of the log
+   that lie below [sp]: that memory is no longer part of the stack. */
+void __fides_stack_restore(void *sp);
+
 /* Entries for C globals, live for the whole run (model §I.4). */
 void *__fides_global(void *addr, size_t n);
 
