@@ -236,6 +236,19 @@ void *__fides_decode_ptr(void *p)
   return (void *)__fides_decode((uintptr_t)p);
 }
 
+void *__fides_check_load(void *p, const char *site)
+{
+  uintptr_t w = (uintptr_t)p;
+  uint32_t i = Fides_index(w);
+  const struct fides_entry *e = &table[i];
+  if (i == 0) return p;
+  if (e->cookie == 0)
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, "load", w, 0, site);
+  if (e->cookie != Fides_cookie(w))
+    caml_fides_trap(FIDES_ACCESS_COOKIE, "load", w, 0, site);
+  return (void *)((e->base & ~FIDES_ADDR_MASK) | Fides_low(w));
+}
+
 /* The write restriction (D43, model §D.6.2 p.33), and D10 for static data.
    It runs only after the access check has passed, so the pointer is live, in
    bounds and correctly cookied; what it answers is whether untrusted code may

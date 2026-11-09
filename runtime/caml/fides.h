@@ -102,6 +102,12 @@ struct fides_entry {
 uintptr_t __fides_decode(uintptr_t w);
 void *__fides_decode_ptr(void *p);
 
+/* D9: a load through [p]. A bare word (index 0) passes through. A tagged
+   word must name a live entry (accessBounds) carrying its cookie
+   (accessCookie): otherwise it has no real address. There is no bounds check
+   on loads; that comes with the confidentiality step. Returns the address. */
+void *__fides_check_load(void *p, const char *site);
+
 /* The access check on a store of [n] bytes through [p] (model accessCheck:
    accessBounds, then accessCookie). Returns the address to store to;
    traps otherwise. [site] is a "file:line:function" string or NULL. */
