@@ -494,18 +494,20 @@ static void check_balanced(intnat d)
 }
 
 /* Close the boundary frames down to [d] and hand [res] back to OCaml.
-   A tagged result is demoted (its tag stripped); the full callbackOk check
-   is Stage 4, so a bare block still passes. */
+   A tagged result must pass the Lean's callbackOk (Step/FFI.lean:229): its
+   entry names an OCaml block and its address is that block (or, for a
+   closure, the promoted infix address). Every failure, including a dead
+   entry or a wrong cookie, traps callbackNotOCamlHeap, the rule's one
+   cause. The result is then demoted (its tag stripped). A bare block still
+   passes until Stage 5 (DECISIONS.md D17). Checked before the frames are
+   released, while the result's entry is still live. */
 value caml_fides_leave(intnat d, value res)
 {
-  value out = res;
+  value out;
   check_balanced(d);
-  if (Is_block(res) && Fides_index((uintptr_t)res) != 0) {
-    if (!caml_fides_valid((uintptr_t)res))
-      caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP, "return a value to OCaml",
-                      (uintptr_t)res, 0, NULL);
-    out = (value)__fides_decode((uintptr_t)res);
-  }
+  if (caml_fides_value_cause(res, &out) >= 0)
+    caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP, "return a value to OCaml",
+                    (uintptr_t)res, 0, NULL);
   unwind_to(d);
   return out;
 }
