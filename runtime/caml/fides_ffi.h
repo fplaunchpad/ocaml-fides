@@ -35,6 +35,11 @@ void caml_fides_unwind_to_handler(void *handler);
 void caml_fides_scan_roots(scanning_action f, scanning_action_flags flags,
                            void *fdata);
 
+/* Is [w] a value sanitized C may hand to the runtime (immediate, bare, or a
+   tagged word naming its promoted block)? -1 or the trap cause; [*raw] is the
+   bare value. */
+int caml_fides_value_cause(value w, value *raw);
+
 /* Is this address inside OCaml's static data (D10)? */
 int caml_fides_in_static_data(uintptr_t a);
 

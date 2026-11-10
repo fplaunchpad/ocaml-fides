@@ -322,10 +322,32 @@ static int names_block(uint32_t i, const struct fides_entry *e, uintptr_t off)
          && off == promoted_offset[i];
 }
 
+/* Is [w] a value sanitized C may hand to the runtime? Immediates and bare
+   words pass (bare blocks are accepted until Stage 5). A tagged word must name
+   a live entry (accessBounds), carry its cookie (accessCookie), and name the
+   value the entry was minted for: an OCaml block, at its promoted offset
+   (callbackNotOCamlHeap, the Lean's callbackOk). Returns -1 or the cause; on
+   success [*raw] is the bare value. */
+int caml_fides_value_cause(value w, value *raw)
+{
+  uint32_t i = Fides_index((uintptr_t)w);
+  *raw = w;
+  if (w == 0 || Is_long(w) || i == 0) return -1;
+  const struct fides_entry *e = caml_fides_entry(i);
+  if (e->cookie == 0) return FIDES_ACCESS_BOUNDS;
+  if (e->cookie != Fides_cookie((uintptr_t)w)) return FIDES_ACCESS_COOKIE;
+  uintptr_t v = __fides_decode((uintptr_t)w);
+  if (v < e->base || !names_block(i, e, v - e->base))
+    return FIDES_CALLBACK_NOT_OCAML_HEAP;
+  *raw = (value)v;
+  return -1;
+}
+
 /* One registered slot. */
 static void scan_slot(scanning_action f, void *fdata, uintptr_t slot)
 {
   uintptr_t a, w;
+  value v;
   int cause = caml_fides_store_cause(slot, sizeof(value), &a);
   if (cause >= 0)
     caml_fides_trap((enum fides_cause)cause,
@@ -352,18 +374,12 @@ static void scan_slot(scanning_action f, void *fdata, uintptr_t slot)
     return;
   }
   /* A root word the collector cannot use (D12). */
-  if (e->cookie == 0)
-    caml_fides_trap(FIDES_ACCESS_BOUNDS, "collector scan of a GC root", w, 0,
-                    NULL);
-  if (e->cookie != Fides_cookie(w))
-    caml_fides_trap(FIDES_ACCESS_COOKIE, "collector scan of a GC root", w, 0,
-                    NULL);
-  uintptr_t v = __fides_decode(w);
-  if (v < e->base || !names_block(i, e, v - e->base))
-    caml_fides_trap(FIDES_CALLBACK_NOT_OCAML_HEAP,
-                    "collector scan of a GC root", w, 0, NULL);
-  value nv = scan_block(f, fdata, i, (value)v);
-  if (nv != (value)v)
+  cause = caml_fides_value_cause((value)w, &v);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, "collector scan of a GC root", w,
+                    0, NULL);
+  value nv = scan_block(f, fdata, i, v);
+  if (nv != v)
     *(uintptr_t *)a = Fides_pack(i, e->cookie, (uintptr_t)nv);
 }
 

@@ -268,7 +268,7 @@ static int ocaml_write_cause(const struct fides_entry *e, uintptr_t a)
    entry the pointer's own index names, and the cookies must match; then the
    write restriction. A zero-width access touches no byte and is not
    checked. */
-int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr)
+int caml_fides_access_cause(uintptr_t w, size_t n, uintptr_t *addr)
 {
   uint32_t i = Fides_index(w);
   const struct fides_entry *e = &table[i];
@@ -279,8 +279,16 @@ int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr)
     return FIDES_ACCESS_BOUNDS;
   if (e->cookie != Fides_cookie(w))
     return FIDES_ACCESS_COOKIE;
+  return -1;
+}
+
+int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr)
+{
+  int cause = caml_fides_access_cause(w, n, addr);
+  if (cause >= 0 || n == 0) return cause;
+  const struct fides_entry *e = &table[Fides_index(w)];
   if (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
-    return ocaml_write_cause(e, a);
+    return ocaml_write_cause(e, *addr);
   return -1;
 }
 

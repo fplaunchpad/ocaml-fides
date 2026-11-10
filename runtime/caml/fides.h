@@ -119,6 +119,11 @@ void *__fides_check_store(void *p, size_t n, const char *site);
    stores on C's behalf (D12: the GC updating a registered root). */
 int caml_fides_store_cause(uintptr_t w, size_t n, uintptr_t *addr);
 
+/* The access check alone (bounds, then cookie), without the write restriction
+   or D10: for trusted services that may write scannable OCaml fields on C's
+   behalf (caml_modify, Stage 4), after checking C's authority. */
+int caml_fides_access_cause(uintptr_t w, size_t n, uintptr_t *addr);
+
 /* halloc / hfree (model §D.4.2) for C heap objects. */
 void *__fides_malloc(size_t n);
 void *__fides_calloc(size_t nmemb, size_t size);
