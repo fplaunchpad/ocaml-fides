@@ -489,8 +489,6 @@ value caml_fides_promote(value v)
   return (value)Fides_pack(Fides_index(w), Fides_cookie(w), (uintptr_t)v);
 }
 
-/* End the activations above [d]: their promoted entries, and the stack
-   objects of any of their C frames that did not run their exits. */
 /* Stage 4 (D16): a block the C API created for C (caml_alloc*, caml_copy_*,
    caml_alloc_custom...). The model's CamlAllocContract grants C exactly the
    new block's extent. The entry is owned by the running activation's frame,
@@ -509,6 +507,8 @@ value caml_fides_own_fresh(value v)
   return (value)w;
 }
 
+/* End the activations above [d]: their promoted entries, and the stack
+   objects of any of their C frames that did not run their exits. */
 static void unwind_to(intnat d)
 {
   if (depth <= d) return;
