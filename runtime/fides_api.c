@@ -39,6 +39,18 @@
 #include "caml/fides.h"
 
 /* Primitives that stubs call directly but that no public header declares. */
+CAMLextern value caml_bytes_set(value, value, value);
+CAMLextern value caml_string_set(value, value, value);
+CAMLextern value caml_bytes_set16(value, value, value);
+CAMLextern value caml_bytes_set32(value, value, value);
+CAMLextern value caml_bytes_set64(value, value, value);
+CAMLextern value caml_fill_bytes(value, value, value, value);
+CAMLextern value caml_blit_bytes(value, value, value, value, value);
+CAMLextern value caml_blit_string(value, value, value, value, value);
+CAMLextern value caml_array_set(value, value, value);
+CAMLextern value caml_array_unsafe_set(value, value, value);
+CAMLextern value caml_floatarray_set(value, value, value);
+CAMLextern value caml_floatarray_unsafe_set(value, value, value);
 CAMLextern value caml_gc_minor(value);
 CAMLextern value caml_gc_major(value);
 CAMLextern value caml_gc_full_major(value);
@@ -447,6 +459,142 @@ WRAPPER value caml_fides_w_caml_alloc_sprintf(const char *format, ...)
   vsnprintf((char *)Bytes_val(res), (size_t)n + 1, f, ap2);
   va_end(ap2);
   return FRESH(res);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Primitives that write into a block C names (D17)                       */
+
+/* The model's runtime-service contract: the service changes only memory C
+   already had authority over (TrustedRuntimeCall.writes). These primitives
+   write into the block their first value argument names, so C must hold
+   that block: a tagged word naming a live OCaml block (a bare word
+   authorises nothing, D3), never static data (D10), and, for the byte
+   primitives, a block C may write bytes into (no-scan, D43).
+
+   Primitives that check their own index (caml_bytes_set, caml_array_set...)
+   keep doing so, so an index out of range still raises Invalid_argument as
+   in OCaml: the wrapper checks C's authority over the whole block, which
+   bounds the write. Primitives that do not check (caml_fill_bytes,
+   caml_blit_*, the unsafe setters) get the exact range checked here. */
+
+/* C holds the whole block [b] and may write it with plain stores (D43).
+   Returns the bare block. */
+static value writable_block(value b, const char *action)
+{
+  uintptr_t a;
+  int cause;
+  if (Is_long(b) || Fides_index((uintptr_t)b) == 0) {
+    cause = FIDES_ACCESS_BOUNDS;
+  } else {
+    const struct fides_entry *e = caml_fides_entry(Fides_index((uintptr_t)b));
+    cause = caml_fides_store_cause((uintptr_t)b, e->size, &a);
+  }
+  if (cause >= 0) caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)b, 0, NULL);
+  return caml_fides_demote(b, action);
+}
+
+/* C may store [n] bytes at [ofs] into block [b] (the full store check). */
+static value writable_range(value b, intnat ofs, intnat n, const char *action)
+{
+  uintptr_t a;
+  if (n <= 0) return caml_fides_demote(b, action);
+  int cause = (Is_long(b) || ofs < 0) ? FIDES_ACCESS_BOUNDS
+              : caml_fides_store_cause((uintptr_t)b + ofs, (size_t)n, &a);
+  if (cause >= 0) caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)b, (size_t)n, NULL);
+  return caml_fides_demote(b, action);
+}
+
+/* An element of an array C holds: for a float array, as writable_*; for an
+   array of values, the caml_modify rule (D15): C holds the block, never
+   static data, and the stored value is checked and demoted. */
+static value array_holder(value a, const char *action)
+{
+  if (!Is_long(a) && Fides_index((uintptr_t)a) != 0) {
+    const struct fides_entry *e = caml_fides_entry(Fides_index((uintptr_t)a));
+    if (e->cookie != 0 && e->kind == FIDES_KIND_OCAML
+        && Fides_block_tag(e->base) < FIDES_NO_SCAN_TAG) {
+      uintptr_t ad;
+      int cause = caml_fides_access_cause((uintptr_t)a, e->size, &ad);
+      if (cause >= 0) caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)a, 0, NULL);
+      return caml_fides_demote(a, action);
+    }
+  }
+  return writable_block(a, action);     /* float arrays, static data, bare */
+}
+
+#define WB(b, fn) writable_block((b), "write into a block with " #fn)
+
+WRAPPER value caml_fides_w_caml_bytes_set(value s, value i, value c)
+{ return caml_bytes_set(WB(s, caml_bytes_set), i, c); }
+
+WRAPPER value caml_fides_w_caml_string_set(value s, value i, value c)
+{ return caml_string_set(WB(s, caml_string_set), i, c); }
+
+WRAPPER value caml_fides_w_caml_bytes_set16(value s, value i, value c)
+{ return caml_bytes_set16(WB(s, caml_bytes_set16), i, c); }
+
+WRAPPER value caml_fides_w_caml_bytes_set32(value s, value i, value c)
+{ return caml_bytes_set32(WB(s, caml_bytes_set32), i, VAL(c, caml_bytes_set32)); }
+
+WRAPPER value caml_fides_w_caml_bytes_set64(value s, value i, value c)
+{ return caml_bytes_set64(WB(s, caml_bytes_set64), i, VAL(c, caml_bytes_set64)); }
+
+WRAPPER value caml_fides_w_caml_fill_bytes(value s, value ofs, value len, value c)
+{
+  return caml_fill_bytes(writable_range(s, Long_val(ofs), Long_val(len),
+                                        "write into a block with caml_fill_bytes"),
+                         ofs, len, c);
+}
+
+WRAPPER value caml_fides_w_caml_blit_bytes(value s1, value o1, value s2, value o2,
+                                           value n)
+{
+  value src = VAL(s1, caml_blit_bytes);
+  value dst = writable_range(s2, Long_val(o2), Long_val(n),
+                             "write into a block with caml_blit_bytes");
+  return caml_blit_bytes(src, o1, dst, o2, n);
+}
+
+WRAPPER value caml_fides_w_caml_blit_string(value s1, value o1, value s2, value o2,
+                                            value n)
+{
+  value src = VAL(s1, caml_blit_string);
+  value dst = writable_range(s2, Long_val(o2), Long_val(n),
+                             "write into a block with caml_blit_string");
+  return caml_blit_string(src, o1, dst, o2, n);
+}
+
+WRAPPER value caml_fides_w_caml_array_set(value a, value i, value v)
+{
+  value arr = array_holder(a, "write into a block with caml_array_set");
+  return caml_array_set(arr, i, VAL(v, caml_array_set));
+}
+
+WRAPPER value caml_fides_w_caml_floatarray_set(value a, value i, value v)
+{
+  return caml_floatarray_set(WB(a, caml_floatarray_set), i, VAL(v, caml_floatarray_set));
+}
+
+/* The unsafe setters do not check the index: the element itself must lie
+   in the block C holds. */
+WRAPPER value caml_fides_w_caml_array_unsafe_set(value a, value i, value v)
+{
+  const char *act = "write into a block with caml_array_unsafe_set";
+  value arr = array_holder(a, act);
+  intnat idx = Long_val(i);
+  uintptr_t ad;
+  if (idx < 0 || caml_fides_access_cause((uintptr_t)a + idx * sizeof(value),
+                                         sizeof(value), &ad) >= 0)
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, act, (uintptr_t)a, sizeof(value), NULL);
+  return caml_array_unsafe_set(arr, i, VAL(v, caml_array_unsafe_set));
+}
+
+WRAPPER value caml_fides_w_caml_floatarray_unsafe_set(value a, value i, value v)
+{
+  intnat idx = Long_val(i);
+  value arr = writable_range(a, idx * (intnat)sizeof(double), sizeof(double),
+                             "write into a block with caml_floatarray_unsafe_set");
+  return caml_floatarray_unsafe_set(arr, i, VAL(v, caml_floatarray_unsafe_set));
 }
 
 /* ---------------------------------------------------------------------- */

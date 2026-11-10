@@ -29,7 +29,7 @@
 #define FIDES_WRAP(name)
 #endif
 
-FIDES_API_REVISION(4)
+FIDES_API_REVISION(5)
 
 /* Reading a value */
 FIDES_WRAP(caml_string_length)
@@ -96,6 +96,21 @@ FIDES_WRAP(caml_alloc_custom_mem)
 FIDES_WRAP(caml_copy_string_array)
 FIDES_WRAP(caml_alloc_array)
 FIDES_WRAP(caml_alloc_sprintf)
+
+/* Primitives that write into a block C names (DECISIONS.md D17). Before
+   they were wrapped, a forged bare address made them write anywhere. */
+FIDES_WRAP(caml_bytes_set)
+FIDES_WRAP(caml_string_set)
+FIDES_WRAP(caml_bytes_set16)
+FIDES_WRAP(caml_bytes_set32)
+FIDES_WRAP(caml_bytes_set64)
+FIDES_WRAP(caml_fill_bytes)
+FIDES_WRAP(caml_blit_bytes)
+FIDES_WRAP(caml_blit_string)
+FIDES_WRAP(caml_array_set)
+FIDES_WRAP(caml_array_unsafe_set)
+FIDES_WRAP(caml_floatarray_set)
+FIDES_WRAP(caml_floatarray_unsafe_set)
 
 /* Raising an exception that carries a value */
 FIDES_WRAP(caml_raise)
