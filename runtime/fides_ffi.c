@@ -343,6 +343,15 @@ int caml_fides_value_cause(value w, value *raw)
   return -1;
 }
 
+value caml_fides_demote(value w, const char *action)
+{
+  value raw;
+  int cause = caml_fides_value_cause(w, &raw);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)w, 0, NULL);
+  return raw;
+}
+
 /* One registered slot. */
 static void scan_slot(scanning_action f, void *fdata, uintptr_t slot)
 {

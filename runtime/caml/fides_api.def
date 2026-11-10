@@ -1,0 +1,74 @@
+/**************************************************************************/
+/*                                                                        */
+/*                                 OCaml                                  */
+/*                                                                        */
+/*   FIDES software sanitizer: the OCaml C API as sanitized C sees it.    */
+/*   See Implementation/DECISIONS.md (Stage 4).                           */
+/*                                                                        */
+/**************************************************************************/
+
+/* The single list of OCaml C API functions that sanitized C reaches
+   through a wrapper. It is included by the runtime (runtime/fides_api.c:
+   the wrappers' type checks and the address-to-wrapper table; runtime/fides.c:
+   the revision symbol) and by the LLVM pass (pass/FidesSanitizer.cpp: the
+   names it redirects). Each includer defines the macros it needs; the rest
+   default to nothing.
+
+   FIDES_WRAP(name)  sanitized C calls caml_fides_w_<name> instead: a wrapper
+                     in the trusted runtime with the same C type, which checks
+                     and strips tagged value arguments, checks pointer
+                     arguments, and calls the real function.
+
+   Bump FIDES_API_REVISION when the list changes: a plugin built against one
+   revision then fails to link against a runtime of another. */
+
+#ifndef FIDES_API_REVISION
+#define FIDES_API_REVISION(n)
+#endif
+#ifndef FIDES_WRAP
+#define FIDES_WRAP(name)
+#endif
+
+FIDES_API_REVISION(1)
+
+/* Reading a value */
+FIDES_WRAP(caml_string_length)
+FIDES_WRAP(caml_string_is_c_safe)
+FIDES_WRAP(caml_array_length)
+FIDES_WRAP(caml_named_value)
+FIDES_WRAP(caml_hash_variant)
+
+/* GC primitives a stub may call directly (Gc.minor and friends) */
+FIDES_WRAP(caml_gc_minor)
+FIDES_WRAP(caml_gc_major)
+FIDES_WRAP(caml_gc_full_major)
+FIDES_WRAP(caml_gc_compaction)
+
+/* Callbacks. Arguments are checked and stripped; whether the callback also
+   revokes their entries is open question E (waiting for the PI). Results
+   are handed to C bare (DECISIONS.md D14). */
+FIDES_WRAP(caml_callback)
+FIDES_WRAP(caml_callback2)
+FIDES_WRAP(caml_callback3)
+FIDES_WRAP(caml_callbackN)
+FIDES_WRAP(caml_callback_exn)
+FIDES_WRAP(caml_callback2_exn)
+FIDES_WRAP(caml_callback3_exn)
+FIDES_WRAP(caml_callbackN_exn)
+FIDES_WRAP(caml_callback_res)
+FIDES_WRAP(caml_callback2_res)
+FIDES_WRAP(caml_callback3_res)
+FIDES_WRAP(caml_callbackN_res)
+
+/* Raising an exception that carries a value */
+FIDES_WRAP(caml_raise)
+FIDES_WRAP(caml_raise_constant)
+FIDES_WRAP(caml_raise_with_arg)
+FIDES_WRAP(caml_raise_with_args)
+FIDES_WRAP(caml_raise_with_string)
+FIDES_WRAP(caml_failwith_value)
+FIDES_WRAP(caml_invalid_argument_value)
+FIDES_WRAP(caml_raise_sys_error)
+
+#undef FIDES_API_REVISION
+#undef FIDES_WRAP

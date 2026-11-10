@@ -40,6 +40,19 @@ void caml_fides_scan_roots(scanning_action f, scanning_action_flags flags,
    bare value. */
 int caml_fides_value_cause(value w, value *raw);
 
+/* The same check for a value a trusted wrapper is handed: traps with
+   [action], or returns the bare value. */
+value caml_fides_demote(value w, const char *action);
+
+/* The wrappers of the C API (runtime/fides_api.c, caml/fides_api.def). */
+struct caml_fides_api_entry {
+  void *real;
+  void *wrapper;
+  const char *name;
+};
+extern const struct caml_fides_api_entry caml_fides_api_table[];
+extern const size_t caml_fides_api_count;
+
 /* Is this address inside OCaml's static data (D10)? */
 int caml_fides_in_static_data(uintptr_t a);
 

@@ -27,6 +27,14 @@
 
 #include "caml/fides.h"
 
+/* The C API revision this runtime implements (caml/fides_api.def). Every
+   module the pass compiles refers to it, so a plugin built against another
+   revision fails to link. */
+#define FIDES_API_REV_NAME(n) __fides_api_rev_##n
+#define FIDES_API_REVISION(n) \
+  __attribute__((visibility("hidden"), used)) const char FIDES_API_REV_NAME(n) = 0;
+#include "caml/fides_api.def"
+
 /* The metadata table T. Index 0 is never issued and stays zeroed, so a
    word with index 0 (any raw address) authorises nothing. */
 static struct fides_entry table[FIDES_TABLE_SIZE];
@@ -236,17 +244,34 @@ void *__fides_decode_ptr(void *p)
   return (void *)__fides_decode((uintptr_t)p);
 }
 
-void *__fides_check_load(void *p, const char *site)
+static int load_cause(uintptr_t w, uintptr_t *addr)
 {
-  uintptr_t w = (uintptr_t)p;
   uint32_t i = Fides_index(w);
   const struct fides_entry *e = &table[i];
-  if (i == 0) return p;
-  if (e->cookie == 0)
-    caml_fides_trap(FIDES_ACCESS_BOUNDS, "load", w, 0, site);
-  if (e->cookie != Fides_cookie(w))
-    caml_fides_trap(FIDES_ACCESS_COOKIE, "load", w, 0, site);
-  return (void *)((e->base & ~FIDES_ADDR_MASK) | Fides_low(w));
+  *addr = w;
+  if (i == 0) return -1;
+  if (e->cookie == 0) return FIDES_ACCESS_BOUNDS;
+  if (e->cookie != Fides_cookie(w)) return FIDES_ACCESS_COOKIE;
+  *addr = (e->base & ~FIDES_ADDR_MASK) | Fides_low(w);
+  return -1;
+}
+
+void *__fides_check_load(void *p, const char *site)
+{
+  uintptr_t a;
+  int cause = load_cause((uintptr_t)p, &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, "load", (uintptr_t)p, 0, site);
+  return (void *)a;
+}
+
+void *caml_fides_load_arg(const void *p, const char *action)
+{
+  uintptr_t a;
+  int cause = load_cause((uintptr_t)p, &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)p, 0, NULL);
+  return (void *)a;
 }
 
 /* The write restriction (D43, model §D.6.2 p.33), and D10 for static data.

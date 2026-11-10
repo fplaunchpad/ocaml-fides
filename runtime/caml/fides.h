@@ -108,6 +108,10 @@ void *__fides_decode_ptr(void *p);
    on loads; that comes with the confidentiality step. Returns the address. */
 void *__fides_check_load(void *p, const char *site);
 
+/* The same check for a pointer a trusted wrapper is handed (Stage 4): traps
+   with [action] in the report instead of "load". Returns the address. */
+void *caml_fides_load_arg(const void *p, const char *action);
+
 /* The access check on a store of [n] bytes through [p] (model accessCheck:
    accessBounds, then accessCookie). Returns the address to store to;
    traps otherwise. [site] is a "file:line:function" string or NULL. */
