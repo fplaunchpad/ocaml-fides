@@ -101,7 +101,9 @@ WRAPPER value caml_fides_w_caml_gc_compaction(value v)
    (whether a callback also revokes its arguments' entries, as the model's
    demoteArg does) waits for the PI; until then nothing is revoked. The
    result reaches C bare. An array of arguments is copied into a buffer in
-   this trusted frame: the real function roots it (CAMLxparamN). */
+   this trusted frame. The real caml_callbackN_exn roots what it still needs
+   (the arguments after the first three, with Begin_roots_block,
+   callback.c:280); the first three are passed on before any allocation. */
 
 WRAPPER value caml_fides_w_caml_callback(value f, value a)
 { return caml_callback(VAL(f, caml_callback), VAL(a, caml_callback)); }

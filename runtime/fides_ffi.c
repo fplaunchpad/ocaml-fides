@@ -511,7 +511,7 @@ static void check_balanced(intnat d)
    closure, the promoted infix address). Every failure, including a dead
    entry or a wrong cookie, traps callbackNotOCamlHeap, the rule's one
    cause. The result is then demoted (its tag stripped). A bare block still
-   passes until Stage 5 (DECISIONS.md D17). Checked before the frames are
+   passes until Stage 5 (DECISIONS.md D13). Checked before the frames are
    released, while the result's entry is still live. */
 value caml_fides_leave(intnat d, value res)
 {
