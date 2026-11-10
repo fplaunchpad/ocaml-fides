@@ -29,7 +29,7 @@
 #define FIDES_WRAP(name)
 #endif
 
-FIDES_API_REVISION(1)
+FIDES_API_REVISION(2)
 
 /* Reading a value */
 FIDES_WRAP(caml_string_length)
@@ -59,6 +59,12 @@ FIDES_WRAP(caml_callback_res)
 FIDES_WRAP(caml_callback2_res)
 FIDES_WRAP(caml_callback3_res)
 FIDES_WRAP(caml_callbackN_res)
+
+/* Field stores (Store_field and friends): the destination must be a field C
+   may write, the value must pass the value check, and it is stored demoted
+   (DECISIONS.md D15). */
+FIDES_WRAP(caml_modify)
+FIDES_WRAP(caml_initialize)
 
 /* Raising an exception that carries a value */
 FIDES_WRAP(caml_raise)

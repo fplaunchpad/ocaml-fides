@@ -270,7 +270,10 @@ CAMLexport void caml_checked_modify_generational_global_root(value *r,
   if (cause >= 0)
     caml_fides_trap((enum fides_cause)cause, "modify a global GC root",
                     (uintptr_t)r, sizeof(value), NULL);
-  *(value *)a = newval;
+  /* The root keeps the bare value (D15, the Lean's RootUpdateContract): a
+     tagged word would die with the activation that holds its entry, and the
+     next collection would trap on it. */
+  *(value *)a = caml_fides_demote(newval, "store a value in a global GC root");
 }
 
 /* ---------------------------------------------------------------------- */

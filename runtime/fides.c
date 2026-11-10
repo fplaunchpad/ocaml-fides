@@ -86,7 +86,7 @@ static const char *const cause_names[] = {
   "accessBounds", "accessCookie", "freeBounds", "freeCookie",
   "freeNotBase", "freeOCamlHeap", "metaTableFull", "callbackNotOCamlHeap",
   "ocamlScannableWrite", "ocamlMethodSuite", "ocamlStaticWrite",
-  "rootFrameUnbalanced"
+  "rootFrameUnbalanced", "fieldMisaligned"
 };
 
 static const char *const kind_names[] = {

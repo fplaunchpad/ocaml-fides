@@ -33,6 +33,7 @@
 #include "caml/callback.h"
 #include "caml/fail.h"
 #include "caml/fides_ffi.h"
+#include "caml/fides.h"
 
 /* Primitives that stubs call directly but that no public header declares. */
 CAMLextern value caml_gc_minor(value);
@@ -175,6 +176,65 @@ WRAPPER caml_result caml_fides_w_caml_callbackN_res(value f, int n,
   value buf[n > 0 ? n : 1];
   vals(buf, args, n, "pass a value to caml_callbackN_res");
   return caml_callbackN_res(VAL(f, caml_callbackN_res), n, buf);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Field stores (D15)                                                     */
+
+/* The model's StoreFieldRuntimeContract (Data/RuntimeCall.lean): the store
+   changes one field of a block, and only memory C already had authority
+   over; D55's storeFieldValueOk: the value is an immediate or a pointer to
+   an OCaml block, stored demoted.
+
+   - Destination in a scannable OCaml block: C may not store there itself
+     (D43), but this is the trusted path for exactly such stores. So: the
+     access check alone (C holds the block, the field is in it), D10 (never
+     into OCaml static data), the field boundary, then the real function on
+     the bare address, which applies the write barrier.
+   - Any other destination (a no-scan OCaml block, C memory): the full store
+     check, as if C stored there itself, then a plain store. C could have made
+     that store directly, so allowing it here grants nothing.
+   - A bare destination authorises nothing (D3): it traps either way. */
+static void store_field(volatile value *fp, value v, int init,
+                        const char *dest_action, const char *value_action)
+{
+  uintptr_t w = (uintptr_t)fp, a;
+  uint32_t i = Fides_index(w);
+  const struct fides_entry *e = caml_fides_entry(i);
+  int cause;
+  if (i != 0 && e->cookie != 0
+      && (e->kind == FIDES_KIND_OCAML || e->kind == FIDES_KIND_OCAML_STATIC)
+      && Fides_block_tag(e->base) < FIDES_NO_SCAN_TAG) {
+    cause = caml_fides_access_cause(w, sizeof(value), &a);
+    if (cause < 0 && e->kind == FIDES_KIND_OCAML_STATIC)
+      cause = FIDES_OCAML_STATIC_WRITE;
+    if (cause < 0 && (a - e->base) % sizeof(value) != 0)
+      cause = FIDES_FIELD_MISALIGNED;
+    if (cause >= 0)
+      caml_fides_trap((enum fides_cause)cause, dest_action, w, sizeof(value),
+                      NULL);
+    value raw = caml_fides_demote(v, value_action);
+    if (init) caml_initialize((volatile value *)a, raw);
+    else caml_modify((volatile value *)a, raw);
+    return;
+  }
+  cause = caml_fides_store_cause(w, sizeof(value), &a);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, dest_action, w, sizeof(value),
+                    NULL);
+  *(volatile value *)a = caml_fides_demote(v, value_action);
+}
+
+WRAPPER void caml_fides_w_caml_modify(volatile value *fp, value v)
+{
+  store_field(fp, v, 0, "caml_modify of a field",
+              "store a value with caml_modify");
+}
+
+WRAPPER void caml_fides_w_caml_initialize(volatile value *fp, value v)
+{
+  store_field(fp, v, 1, "caml_initialize of a field",
+              "store a value with caml_initialize");
 }
 
 /* ---------------------------------------------------------------------- */

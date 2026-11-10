@@ -56,7 +56,12 @@ enum fides_cause {
      root frames that were not its own. The nearest Lean cause is
      stackMetaUnbalanced (a cross-compartment return with live stack
      objects); the Lean has no root-frame stack, so it has no cause for this. */
-  FIDES_ROOT_FRAME_UNBALANCED
+  FIDES_ROOT_FRAME_UNBALANCED,
+  /* Stage 4 (DECISIONS.md D15): a caml_modify / caml_initialize destination
+     inside a scannable block but not on a field boundary, which would write
+     half a value into each of two fields. The Lean addresses fields by
+     index (StoreFieldRuntimeContract), so it has no cause for this. */
+  FIDES_FIELD_MISALIGNED
 };
 
 /* OCaml's own header constants, repeated here so this file builds without the
