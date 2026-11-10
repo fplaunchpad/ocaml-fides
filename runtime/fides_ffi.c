@@ -44,8 +44,8 @@
 /* Bounds of the sanitized C code, from the section the pass puts it in.
    Weak: a program with no sanitized C leaves them null, and then nothing is
    ever promoted. */
-extern char __start_fides_c_text[] __attribute__((weak));
-extern char __stop_fides_c_text[] __attribute__((weak));
+extern char __start_fides_c_text[] __attribute__((weak, visibility("hidden")));
+extern char __stop_fides_c_text[] __attribute__((weak, visibility("hidden")));
 
 /* OCaml's static data: the blocks ocamlopt emits into the executable
    (string literals, structured constants, closed top-level closures). The
