@@ -33,6 +33,8 @@
 #include "caml/callback.h"
 #include "caml/fail.h"
 #include "caml/custom.h"
+#include <stdarg.h>
+#include <stdio.h>
 #include "caml/fides_ffi.h"
 #include "caml/fides.h"
 
@@ -377,6 +379,74 @@ WRAPPER value caml_fides_w_caml_alloc_custom_mem(
 {
   return FRESH(caml_alloc_custom_mem(PTR(ops, caml_alloc_custom_mem), size,
                                      mem));
+}
+
+/* Arrays of C strings (caml_copy_string_array, caml_alloc_array). The real
+   functions cannot be called: they would read the array and the strings
+   through tagged pointers, and store whatever the converter returns
+   (tagged, if the converter is sanitized C) into the new block. So the loop
+   is redone here, after alloc.c: each element pointer is read through the
+   load check, the converter is called the way the pass would call it, and
+   its result is checked and stored bare.
+
+   [funct] is what sanitized C passed: a wrapper (when it named a listed C API
+   function, e.g. caml_copy_string), sanitized C, or other code. */
+static void *real_of_wrapper(void *fn)
+{
+  for (size_t k = 0; k < caml_fides_api_count; k++)
+    if (caml_fides_api_table[k].wrapper == fn) return caml_fides_api_table[k].real;
+  return NULL;
+}
+
+static value alloc_array(value (*funct)(char const *),
+                         char const *const *arr, const char *action)
+{
+  CAMLparam0();
+  CAMLlocal2(v, result);
+  mlsize_t n = 0;
+  while (*(char const *const *)caml_fides_load_arg(&arr[n], action) != NULL) n++;
+  result = caml_alloc(n, 0);
+  value (*real)(char const *) = (value (*)(char const *))real_of_wrapper((void *)funct);
+  int sanitized = caml_fides_in_sanitized_c((void *)funct);
+  for (mlsize_t i = 0; i < n; i++) {
+    char const *elem = *(char const *const *)caml_fides_load_arg(&arr[i], action);
+    if (real != NULL) v = real(caml_fides_load_arg(elem, action));
+    else if (sanitized) v = funct(elem);       /* sanitized C takes tagged */
+    else v = funct(caml_fides_load_arg(elem, action));
+    v = caml_fides_demote(v, action);
+    caml_modify(&Field(result, i), v);
+  }
+  CAMLreturn(FRESH(result));
+}
+
+WRAPPER value caml_fides_w_caml_copy_string_array(char const *const *arr)
+{
+  return alloc_array(caml_copy_string, arr,
+                     "pass a string array to caml_copy_string_array");
+}
+
+WRAPPER value caml_fides_w_caml_alloc_array(value (*funct)(char const *),
+                                            char const *const *arr)
+{
+  return alloc_array(funct, arr, "pass an array to caml_alloc_array");
+}
+
+/* The pass decodes variadic pointer arguments (they would reach libc's
+   formatter unchecked otherwise), so only the format is checked here. %n,
+   which writes through its argument, is the libc gap of section 4. */
+WRAPPER value caml_fides_w_caml_alloc_sprintf(const char *format, ...)
+{
+  const char *f = PTR(format, caml_alloc_sprintf);
+  va_list ap, ap2;
+  va_start(ap, format);
+  va_copy(ap2, ap);
+  int n = vsnprintf(NULL, 0, f, ap);
+  va_end(ap);
+  if (n < 0) n = 0;
+  value res = caml_alloc_string(n);   /* OCaml strings keep a byte after n */
+  vsnprintf((char *)Bytes_val(res), (size_t)n + 1, f, ap2);
+  va_end(ap2);
+  return FRESH(res);
 }
 
 /* ---------------------------------------------------------------------- */

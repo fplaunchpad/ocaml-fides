@@ -29,7 +29,7 @@
 #define FIDES_WRAP(name)
 #endif
 
-FIDES_API_REVISION(3)
+FIDES_API_REVISION(4)
 
 /* Reading a value */
 FIDES_WRAP(caml_string_length)
@@ -92,6 +92,10 @@ FIDES_WRAP(caml_copy_int64)
 FIDES_WRAP(caml_copy_nativeint)
 FIDES_WRAP(caml_alloc_custom)
 FIDES_WRAP(caml_alloc_custom_mem)
+/* ... with values or pointers nested in their arguments */
+FIDES_WRAP(caml_copy_string_array)
+FIDES_WRAP(caml_alloc_array)
+FIDES_WRAP(caml_alloc_sprintf)
 
 /* Raising an exception that carries a value */
 FIDES_WRAP(caml_raise)

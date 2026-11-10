@@ -91,6 +91,11 @@ static int in_sanitized_c(void *fn)
          && p >= __start_fides_c_text && p < __stop_fides_c_text;
 }
 
+int caml_fides_in_sanitized_c(void *fn)
+{
+  return in_sanitized_c(fn);
+}
+
 /* ---------------------------------------------------------------------- */
 /* Boundary frames                                                        */
 

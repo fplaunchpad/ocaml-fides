@@ -57,6 +57,9 @@ struct caml_fides_api_entry {
 extern const struct caml_fides_api_entry caml_fides_api_table[];
 extern const size_t caml_fides_api_count;
 
+/* Is this code address inside the sanitized C (section fides_c_text)? */
+int caml_fides_in_sanitized_c(void *fn);
+
 /* Is this address inside OCaml's static data (D10)? */
 int caml_fides_in_static_data(uintptr_t a);
 
