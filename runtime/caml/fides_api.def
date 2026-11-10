@@ -29,7 +29,7 @@
 #define FIDES_WRAP(name)
 #endif
 
-FIDES_API_REVISION(2)
+FIDES_API_REVISION(3)
 
 /* Reading a value */
 FIDES_WRAP(caml_string_length)
@@ -65,6 +65,33 @@ FIDES_WRAP(caml_callbackN_res)
    (DECISIONS.md D15). */
 FIDES_WRAP(caml_modify)
 FIDES_WRAP(caml_initialize)
+
+/* Allocation: the new block is handed to C tagged, with an entry over
+   exactly the block, owned by the activation (DECISIONS.md D16). Values
+   stored into it are checked and demoted. */
+FIDES_WRAP(caml_alloc)
+FIDES_WRAP(caml_alloc_small)
+FIDES_WRAP(caml_alloc_tuple)
+FIDES_WRAP(caml_alloc_string)
+FIDES_WRAP(caml_alloc_initialized_string)
+FIDES_WRAP(caml_alloc_float_array)
+FIDES_WRAP(caml_alloc_1)
+FIDES_WRAP(caml_alloc_2)
+FIDES_WRAP(caml_alloc_3)
+FIDES_WRAP(caml_alloc_4)
+FIDES_WRAP(caml_alloc_5)
+FIDES_WRAP(caml_alloc_6)
+FIDES_WRAP(caml_alloc_7)
+FIDES_WRAP(caml_alloc_8)
+FIDES_WRAP(caml_alloc_9)
+FIDES_WRAP(caml_alloc_some)
+FIDES_WRAP(caml_copy_string)
+FIDES_WRAP(caml_copy_double)
+FIDES_WRAP(caml_copy_int32)
+FIDES_WRAP(caml_copy_int64)
+FIDES_WRAP(caml_copy_nativeint)
+FIDES_WRAP(caml_alloc_custom)
+FIDES_WRAP(caml_alloc_custom_mem)
 
 /* Raising an exception that carries a value */
 FIDES_WRAP(caml_raise)

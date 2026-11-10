@@ -70,11 +70,21 @@ CAMLextern value caml_alloc_final (mlsize_t, /*size in words*/
 
 CAMLextern int caml_convert_flag_list (value, const int *);
 
+#ifdef CAML_FIDES
+CAMLextern void caml_initialize (volatile value *, value);   /* memory.h */
+#endif
+
 /* Convenience functions to deal with unboxable types. */
 Caml_inline value caml_alloc_unboxed (value arg) { return arg; }
 Caml_inline value caml_alloc_boxed (value arg) {
   value result = caml_alloc_small (1, 0);
+#ifdef CAML_FIDES
+  /* Sanitized C may not store into a scannable block itself (FIDES D43):
+     initialise through the checked path (Implementation/DECISIONS.md D16). */
+  caml_initialize (&Field (result, 0), arg);
+#else
   Field (result, 0) = arg;
+#endif
   return result;
 }
 Caml_inline value caml_field_unboxed (value arg) { return arg; }

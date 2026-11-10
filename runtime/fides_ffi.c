@@ -486,6 +486,24 @@ value caml_fides_promote(value v)
 
 /* End the activations above [d]: their promoted entries, and the stack
    objects of any of their C frames that did not run their exits. */
+/* Stage 4 (D16): a block the C API created for C (caml_alloc*, caml_copy_*,
+   caml_alloc_custom...). The model's CamlAllocContract grants C exactly the
+   new block's extent. The entry is owned by the running activation's frame,
+   rooted there like a promoted argument (so it follows the block in a
+   collection, D12), and released when the activation returns or raises
+   (D4). Atoms (size 0, shared static data) and blocks made outside any
+   activation stay bare. */
+value caml_fides_own_fresh(value v)
+{
+  if (depth == 0 || Is_long(v) || Wosize_val(v) == 0) return v;
+  uintptr_t w = caml_fides_mint((uintptr_t)v, Wosize_val(v) * sizeof(value),
+                                FIDES_KIND_OCAML);
+  uint32_t i = Fides_index(w);
+  record(&frames[depth - 1], (uint16_t)i, v);
+  promoted_offset[i] = 0;
+  return (value)w;
+}
+
 static void unwind_to(intnat d)
 {
   if (depth <= d) return;

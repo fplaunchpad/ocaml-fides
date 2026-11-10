@@ -44,6 +44,10 @@ int caml_fides_value_cause(value w, value *raw);
    [action], or returns the bare value. */
 value caml_fides_demote(value w, const char *action);
 
+/* A block the C API created for C: mint an entry over it, owned and rooted
+   by the running activation (D16), and return the tagged word. */
+value caml_fides_own_fresh(value v);
+
 /* The wrappers of the C API (runtime/fides_api.c, caml/fides_api.def). */
 struct caml_fides_api_entry {
   void *real;

@@ -32,6 +32,7 @@
 #include "caml/alloc.h"
 #include "caml/callback.h"
 #include "caml/fail.h"
+#include "caml/custom.h"
 #include "caml/fides_ffi.h"
 #include "caml/fides.h"
 
@@ -237,6 +238,145 @@ WRAPPER void caml_fides_w_caml_initialize(volatile value *fp, value v)
 {
   store_field(fp, v, 1, "caml_initialize of a field",
               "store a value with caml_initialize");
+}
+
+/* ---------------------------------------------------------------------- */
+/* Allocation (D16)                                                       */
+
+/* The new block reaches C tagged (caml_fides_own_fresh). Arguments that the
+   real function stores into it are checked and stored bare. */
+#define FRESH(v) caml_fides_own_fresh(v)
+
+WRAPPER value caml_fides_w_caml_alloc(mlsize_t n, tag_t tag)
+{ return FRESH(caml_alloc(n, tag)); }
+
+/* caml_alloc_small leaves the fields uninitialised. The frame roots the
+   block as soon as it is minted, so a collection before C initialises it
+   would trace whatever the minor heap held there: the wrapper fills the
+   fields with Val_unit first, as caml_alloc does. */
+WRAPPER value caml_fides_w_caml_alloc_small(mlsize_t n, tag_t tag)
+{
+  value v = caml_alloc_small(n, tag);
+  if (tag < No_scan_tag)
+    for (mlsize_t i = 0; i < n; i++) Field(v, i) = Val_unit;
+  return FRESH(v);
+}
+
+WRAPPER value caml_fides_w_caml_alloc_tuple(mlsize_t n)
+{ return FRESH(caml_alloc_tuple(n)); }
+
+WRAPPER value caml_fides_w_caml_alloc_string(mlsize_t len)
+{ return FRESH(caml_alloc_string(len)); }
+
+WRAPPER value caml_fides_w_caml_alloc_initialized_string(mlsize_t len,
+                                                         const char *p)
+{
+  return FRESH(caml_alloc_initialized_string(
+      len, PTR(p, caml_alloc_initialized_string)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_float_array(mlsize_t len)
+{ return FRESH(caml_alloc_float_array(len)); }
+
+#define A(v, fn) VAL(v, fn)
+WRAPPER value caml_fides_w_caml_alloc_1(tag_t t, value a)
+{ return FRESH(caml_alloc_1(t, A(a, caml_alloc_1))); }
+
+WRAPPER value caml_fides_w_caml_alloc_2(tag_t t, value a, value b)
+{ return FRESH(caml_alloc_2(t, A(a, caml_alloc_2), A(b, caml_alloc_2))); }
+
+WRAPPER value caml_fides_w_caml_alloc_3(tag_t t, value a, value b, value c)
+{
+  return FRESH(caml_alloc_3(t, A(a, caml_alloc_3), A(b, caml_alloc_3),
+                            A(c, caml_alloc_3)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_4(tag_t t, value a, value b, value c,
+                                        value d)
+{
+  return FRESH(caml_alloc_4(t, A(a, caml_alloc_4), A(b, caml_alloc_4),
+                            A(c, caml_alloc_4), A(d, caml_alloc_4)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_5(tag_t t, value a, value b, value c,
+                                        value d, value e)
+{
+  return FRESH(caml_alloc_5(t, A(a, caml_alloc_5), A(b, caml_alloc_5),
+                            A(c, caml_alloc_5), A(d, caml_alloc_5),
+                            A(e, caml_alloc_5)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_6(tag_t t, value a, value b, value c,
+                                        value d, value e, value f)
+{
+  return FRESH(caml_alloc_6(t, A(a, caml_alloc_6), A(b, caml_alloc_6),
+                            A(c, caml_alloc_6), A(d, caml_alloc_6),
+                            A(e, caml_alloc_6), A(f, caml_alloc_6)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_7(tag_t t, value a, value b, value c,
+                                        value d, value e, value f, value g)
+{
+  return FRESH(caml_alloc_7(t, A(a, caml_alloc_7), A(b, caml_alloc_7),
+                            A(c, caml_alloc_7), A(d, caml_alloc_7),
+                            A(e, caml_alloc_7), A(f, caml_alloc_7),
+                            A(g, caml_alloc_7)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_8(tag_t t, value a, value b, value c,
+                                        value d, value e, value f, value g,
+                                        value h)
+{
+  return FRESH(caml_alloc_8(t, A(a, caml_alloc_8), A(b, caml_alloc_8),
+                            A(c, caml_alloc_8), A(d, caml_alloc_8),
+                            A(e, caml_alloc_8), A(f, caml_alloc_8),
+                            A(g, caml_alloc_8), A(h, caml_alloc_8)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_9(tag_t t, value a, value b, value c,
+                                        value d, value e, value f, value g,
+                                        value h, value i)
+{
+  return FRESH(caml_alloc_9(t, A(a, caml_alloc_9), A(b, caml_alloc_9),
+                            A(c, caml_alloc_9), A(d, caml_alloc_9),
+                            A(e, caml_alloc_9), A(f, caml_alloc_9),
+                            A(g, caml_alloc_9), A(h, caml_alloc_9),
+                            A(i, caml_alloc_9)));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_some(value a)
+{ return FRESH(caml_alloc_some(A(a, caml_alloc_some))); }
+
+WRAPPER value caml_fides_w_caml_copy_string(char const *s)
+{ return FRESH(caml_copy_string(PTR(s, caml_copy_string))); }
+
+WRAPPER value caml_fides_w_caml_copy_double(double d)
+{ return FRESH(caml_copy_double(d)); }
+
+WRAPPER value caml_fides_w_caml_copy_int32(int32_t i)
+{ return FRESH(caml_copy_int32(i)); }
+
+WRAPPER value caml_fides_w_caml_copy_int64(int64_t i)
+{ return FRESH(caml_copy_int64(i)); }
+
+WRAPPER value caml_fides_w_caml_copy_nativeint(intnat i)
+{ return FRESH(caml_copy_nativeint(i)); }
+
+/* The runtime keeps the operations' address in the block (its method
+   suite, which C may not overwrite: ocamlMethodSuite), so it gets the
+   decoded address. */
+WRAPPER value caml_fides_w_caml_alloc_custom(const struct custom_operations *ops,
+                                             uintnat size, mlsize_t mem,
+                                             mlsize_t max)
+{
+  return FRESH(caml_alloc_custom(PTR(ops, caml_alloc_custom), size, mem, max));
+}
+
+WRAPPER value caml_fides_w_caml_alloc_custom_mem(
+    const struct custom_operations *ops, uintnat size, mlsize_t mem)
+{
+  return FRESH(caml_alloc_custom_mem(PTR(ops, caml_alloc_custom_mem), size,
+                                     mem));
 }
 
 /* ---------------------------------------------------------------------- */
