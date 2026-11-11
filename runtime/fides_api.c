@@ -493,13 +493,40 @@ static value writable_block(value b, const char *action)
   return caml_fides_demote(b, action);
 }
 
+/* May C write [n] bytes at byte offset [ofs] of block [b]? The range is
+   checked against b's own entry by subtraction. Adding [ofs] to the tagged
+   word instead would let a large offset carry into the cookie or index bits
+   and check a different entry from the block the real primitive writes
+   (docs: Known bugs 13). [rules]: also apply the write restriction (D43) and
+   D10, as for a store C makes itself; without it, only D10 (the caml_modify
+   rule, D15). */
+static int range_cause(value b, uintnat ofs, uintnat n, int rules)
+{
+  uint32_t i = Fides_index((uintptr_t)b);
+  if (Is_long(b) || i == 0) return FIDES_ACCESS_BOUNDS;
+  const struct fides_entry *e = caml_fides_entry(i);
+  if (e->cookie == 0) return FIDES_ACCESS_BOUNDS;
+  if (e->cookie != Fides_cookie((uintptr_t)b)) return FIDES_ACCESS_COOKIE;
+  uintptr_t start = __fides_decode((uintptr_t)b);
+  if (start < e->base) return FIDES_ACCESS_BOUNDS;
+  uintptr_t so = start - e->base;
+  if (so > e->size || ofs > e->size - so || n > e->size - so - ofs)
+    return FIDES_ACCESS_BOUNDS;
+  if (e->kind == FIDES_KIND_OCAML_STATIC) return FIDES_OCAML_STATIC_WRITE;
+  if (rules && e->kind == FIDES_KIND_OCAML) {
+    uint8_t tag = Fides_block_tag(e->base);
+    if (tag < FIDES_NO_SCAN_TAG) return FIDES_OCAML_SCANNABLE_WRITE;
+    if (tag == FIDES_CUSTOM_TAG && so + ofs == 0) return FIDES_OCAML_METHOD_SUITE;
+  }
+  return -1;
+}
+
 /* C may store [n] bytes at [ofs] into block [b] (the full store check). */
 static value writable_range(value b, intnat ofs, intnat n, const char *action)
 {
-  uintptr_t a;
   if (n <= 0) return caml_fides_demote(b, action);
-  int cause = (Is_long(b) || ofs < 0) ? FIDES_ACCESS_BOUNDS
-              : caml_fides_store_cause((uintptr_t)b + ofs, (size_t)n, &a);
+  int cause = ofs < 0 ? FIDES_ACCESS_BOUNDS
+                      : range_cause(b, (uintnat)ofs, (uintnat)n, 1);
   if (cause >= 0) caml_fides_trap((enum fides_cause)cause, action, (uintptr_t)b, (size_t)n, NULL);
   return caml_fides_demote(b, action);
 }
@@ -582,18 +609,21 @@ WRAPPER value caml_fides_w_caml_array_unsafe_set(value a, value i, value v)
   const char *act = "write into a block with caml_array_unsafe_set";
   value arr = array_holder(a, act);
   intnat idx = Long_val(i);
-  uintptr_t ad;
-  if (idx < 0 || caml_fides_access_cause((uintptr_t)a + idx * sizeof(value),
-                                         sizeof(value), &ad) >= 0)
-    caml_fides_trap(FIDES_ACCESS_BOUNDS, act, (uintptr_t)a, sizeof(value), NULL);
+  int cause = (idx < 0 || (uintnat)idx > SIZE_MAX / sizeof(value))
+              ? FIDES_ACCESS_BOUNDS
+              : range_cause(a, (uintnat)idx * sizeof(value), sizeof(value), 0);
+  if (cause >= 0)
+    caml_fides_trap((enum fides_cause)cause, act, (uintptr_t)a, sizeof(value), NULL);
   return caml_array_unsafe_set(arr, i, VAL(v, caml_array_unsafe_set));
 }
 
 WRAPPER value caml_fides_w_caml_floatarray_unsafe_set(value a, value i, value v)
 {
   intnat idx = Long_val(i);
-  value arr = writable_range(a, idx * (intnat)sizeof(double), sizeof(double),
-                             "write into a block with caml_floatarray_unsafe_set");
+  const char *act = "write into a block with caml_floatarray_unsafe_set";
+  if (idx < 0 || (uintnat)idx > SIZE_MAX / sizeof(double))
+    caml_fides_trap(FIDES_ACCESS_BOUNDS, act, (uintptr_t)a, sizeof(double), NULL);
+  value arr = writable_range(a, idx * (intnat)sizeof(double), sizeof(double), act);
   return caml_floatarray_unsafe_set(arr, i, VAL(v, caml_floatarray_unsafe_set));
 }
 
