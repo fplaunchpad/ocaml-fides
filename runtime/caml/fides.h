@@ -176,8 +176,9 @@ int *__fides_errno_location(void);
 void *__fides_wrapper_for(void *fn);
 
 /* Stage 4 (D19): dlsym and dlvsym as sanitized C sees them (the pass
-   redirects them): results are mapped to wrappers and checked versions, and
-   runtime functions sanitized C may not call read as absent (NULL). */
+   redirects them): results are mapped to wrappers and checked versions
+   (dlsym and dlvsym themselves included), and a runtime function sanitized C
+   may not call gives a trampoline that traps runtimeNotWrapped when called. */
 void *__fides_dlsym(void *handle, const char *name);
 void *__fides_dlvsym(void *handle, const char *name, const char *version);
 

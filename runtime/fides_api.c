@@ -799,6 +799,10 @@ static const struct { const char *name; void *replacement; } dl_map[] = {
   { "realloc", (void *)__fides_realloc },
   { "free", (void *)__fides_free },
   { "__errno_location", (void *)__fides_errno_location },
+  /* dlsym itself: the real one would hand out unsettled addresses
+     (docs: Known bugs 14). */
+  { "dlsym", (void *)__fides_dlsym },
+  { "dlvsym", (void *)__fides_dlvsym },
 };
 
 /* Called in place of a refused runtime function: whatever its signature,
