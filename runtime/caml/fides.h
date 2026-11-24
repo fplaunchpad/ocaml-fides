@@ -61,7 +61,12 @@ enum fides_cause {
      inside a scannable block but not on a field boundary, which would write
      half a value into each of two fields. The Lean addresses fields by
      index (StoreFieldRuntimeContract), so it has no cause for this. */
-  FIDES_FIELD_MISALIGNED
+  FIDES_FIELD_MISALIGNED,
+  /* Stage 4 (DECISIONS.md D18): sanitized C called, through a pointer it
+     obtained at run time, an OCaml runtime function that has no wrapper to
+     check what C hands it. A direct call to one is refused at compile time.
+     Not in the Lean, which has no runtime functions as such. */
+  FIDES_RUNTIME_NOT_WRAPPED
 };
 
 /* OCaml's own header constants, repeated here so this file builds without the
@@ -163,6 +168,12 @@ void *__fides_global(void *addr, size_t n);
 
 /* errno, as a tagged pointer to a permanent entry (DECISIONS.md D3). */
 int *__fides_errno_location(void);
+
+/* Stage 4 (D18): the target an indirect call from sanitized C should use.
+   A C API function with a wrapper gives its wrapper; a runtime function
+   with none traps runtimeNotWrapped; anything else is returned unchanged.
+   Inserted by the pass at every indirect call (runtime/fides_api.c). */
+void *__fides_wrapper_for(void *fn);
 
 /* Mint an entry; used by the runtime for promotion. Traps metaTableFull. */
 uintptr_t caml_fides_mint(uintptr_t base, uintptr_t size, enum fides_kind kind);

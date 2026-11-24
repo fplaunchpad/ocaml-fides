@@ -35,6 +35,7 @@
 #include "caml/custom.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "caml/fides_ffi.h"
 #include "caml/fides.h"
 
@@ -683,3 +684,75 @@ const struct caml_fides_api_entry caml_fides_api_table[] = {
 };
 const size_t caml_fides_api_count =
   sizeof caml_fides_api_table / sizeof caml_fides_api_table[0];
+
+/* ---------------------------------------------------------------------- */
+/* Indirect calls (D18)                                                   */
+
+/* The pass inserts T = __fides_wrapper_for(T) before every indirect call in
+   sanitized C. Direct calls are settled at compile time (redirected to the
+   wrapper, or refused); a pointer obtained at run time (dlsym, or handed in
+   by uninstrumented code) is settled here. The lookups are sorted on first
+   use. Single-threaded, like the rest of the sanitizer. */
+
+struct caml_fides_api_denied { const void *fn; const char *name; };
+extern const struct caml_fides_api_denied caml_fides_api_deny_table[];
+extern const size_t caml_fides_api_deny_count;
+
+extern char __start_fides_wrap_text[] __attribute__((weak, visibility("hidden")));
+extern char __stop_fides_wrap_text[] __attribute__((weak, visibility("hidden")));
+
+static const struct caml_fides_api_entry **by_real;
+static const void **denied;
+static size_t denied_n;
+
+static int cmp_entry(const void *a, const void *b)
+{
+  uintptr_t x = (uintptr_t)(*(const struct caml_fides_api_entry *const *)a)->real;
+  uintptr_t y = (uintptr_t)(*(const struct caml_fides_api_entry *const *)b)->real;
+  return (x > y) - (x < y);
+}
+
+static int cmp_ptr(const void *a, const void *b)
+{
+  uintptr_t x = (uintptr_t)*(const void *const *)a;
+  uintptr_t y = (uintptr_t)*(const void *const *)b;
+  return (x > y) - (x < y);
+}
+
+static void init_lookup(void)
+{
+  by_real = malloc(caml_fides_api_count * sizeof *by_real);
+  denied = malloc((caml_fides_api_deny_count + 1) * sizeof *denied);
+  if (by_real == NULL || denied == NULL)
+    caml_fatal_error("FIDES: out of memory for the C API lookup");
+  for (size_t k = 0; k < caml_fides_api_count; k++)
+    by_real[k] = &caml_fides_api_table[k];
+  qsort(by_real, caml_fides_api_count, sizeof *by_real, cmp_entry);
+  for (size_t k = 0; k < caml_fides_api_deny_count; k++)
+    if (caml_fides_api_deny_table[k].fn != NULL)
+      denied[denied_n++] = caml_fides_api_deny_table[k].fn;
+  qsort(denied, denied_n, sizeof *denied, cmp_ptr);
+}
+
+void *__fides_wrapper_for(void *fn)
+{
+  char *p = fn;
+  if (caml_fides_in_sanitized_c(fn)
+      || (__start_fides_wrap_text != NULL && p >= __start_fides_wrap_text
+          && p < __stop_fides_wrap_text))
+    return fn;
+  if (by_real == NULL) init_lookup();
+  size_t lo = 0, hi = caml_fides_api_count;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    uintptr_t r = (uintptr_t)by_real[mid]->real;
+    if (r == (uintptr_t)fn) return by_real[mid]->wrapper;
+    if (r < (uintptr_t)fn) lo = mid + 1; else hi = mid;
+  }
+  const void *key = fn;
+  if (bsearch(&key, denied, denied_n, sizeof *denied, cmp_ptr) != NULL)
+    caml_fides_trap(FIDES_RUNTIME_NOT_WRAPPED,
+                    "call an OCaml runtime function through a pointer",
+                    (uintptr_t)fn, 0, NULL);
+  return fn;
+}

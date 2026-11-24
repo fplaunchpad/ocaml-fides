@@ -1253,6 +1253,7 @@ runtime_NATIVE_ONLY_C_SOURCES = \
   fides \
   fides_ffi \
   fides_api \
+  fides_api_deny \
   frame_descriptors \
   startup_nat \
   signals_nat

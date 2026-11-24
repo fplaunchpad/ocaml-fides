@@ -163,6 +163,11 @@ struct roots {
   intnat n, cap;
 };
 
+/* The checked root functions take tagged pointers. They sit in the wrappers'
+   section, so an indirect call to one keeps its pointer arguments tagged
+   (the pass treats a target there like a wrapper, D18). */
+#define FIDES_WRAP_SECTION __attribute__((section("fides_wrap_text")))
+
 /* Local roots (CAMLparam/CAMLlocal) form a stack; a root frame is a mark,
    the stack height when it was opened. Global roots are an unordered set. */
 static struct roots locals, globals;
@@ -204,12 +209,12 @@ static intnat root_floor(void)
   return depth > 0 ? frames[depth - 1].root_base : 0;
 }
 
-CAMLexport intnat caml_checked_roots_mark(void)
+CAMLexport FIDES_WRAP_SECTION intnat caml_checked_roots_mark(void)
 {
   return locals.n;
 }
 
-CAMLexport void caml_checked_roots_register(value *slots, intnat n)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_roots_register(value *slots, intnat n)
 {
   check_slot((uintptr_t)slots, n, "register a local GC root");
   push_root(&locals, (uintptr_t)slots, n);
@@ -217,7 +222,7 @@ CAMLexport void caml_checked_roots_register(value *slots, intnat n)
 
 /* CAMLdrop: release every root registered since [mark]. Releasing a frame
    that is not this activation's, or one already released, traps. */
-CAMLexport void caml_checked_roots_restore(intnat mark)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_roots_restore(intnat mark)
 {
   if (mark < root_floor() || mark > locals.n)
     caml_fides_trap(FIDES_ROOT_FRAME_UNBALANCED,
@@ -241,7 +246,7 @@ static intnat find_global(uintptr_t addr)
    removal then unregisters it however often it was registered. The record
    keeps the latest tagged address, in case the memory was freed and
    reallocated in between. */
-CAMLexport void caml_checked_register_global_root(value *r)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_register_global_root(value *r)
 {
   intnat i;
   check_slot((uintptr_t)r, 1, "register a global GC root");
@@ -250,24 +255,24 @@ CAMLexport void caml_checked_register_global_root(value *r)
   else push_root(&globals, (uintptr_t)r, 1);
 }
 
-CAMLexport void caml_checked_remove_global_root(value *r)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_remove_global_root(value *r)
 {
   intnat i = find_global(__fides_decode((uintptr_t)r));
   if (i < 0) return;                  /* as the stock function: no-op */
   globals.v[i] = globals.v[--globals.n];
 }
 
-CAMLexport void caml_checked_register_generational_global_root(value *r)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_register_generational_global_root(value *r)
 {
   caml_checked_register_global_root(r);
 }
 
-CAMLexport void caml_checked_remove_generational_global_root(value *r)
+CAMLexport FIDES_WRAP_SECTION void caml_checked_remove_generational_global_root(value *r)
 {
   caml_checked_remove_global_root(r);
 }
 
-CAMLexport void caml_checked_modify_generational_global_root(value *r,
+CAMLexport FIDES_WRAP_SECTION void caml_checked_modify_generational_global_root(value *r,
                                                              value newval)
 {
   uintptr_t a;
