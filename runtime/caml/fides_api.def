@@ -44,7 +44,7 @@
 #define FIDES_SELF(name)
 #endif
 
-FIDES_API_REVISION(5)
+FIDES_API_REVISION(6)
 
 /* Reading a value */
 FIDES_WRAP(caml_string_length)
@@ -162,17 +162,10 @@ FIDES_PASS(caml_hash_mix_intnat)
 FIDES_PASS(caml_hash_mix_int64)
 FIDES_PASS(caml_hash_mix_double)
 FIDES_PASS(caml_hash_mix_float)
-/* The runtime's C allocator: results are bare (a known false positive, as
-   for libc allocations: DECISIONS.md section 4). */
-FIDES_PASS(caml_stat_alloc)
-FIDES_PASS(caml_stat_alloc_noexc)
-FIDES_PASS(caml_stat_calloc_noexc)
-FIDES_PASS(caml_stat_resize)
-FIDES_PASS(caml_stat_resize_noexc)
-FIDES_PASS(caml_stat_free)
-FIDES_PASS(caml_stat_strdup)
-FIDES_PASS(caml_stat_strdup_noexc)
-FIDES_PASS(caml_stat_strconcat)
+/* The runtime's C allocator (caml_stat_*) is refused, not passed: its
+   free and resize release whatever address C hands them, unchecked, and its
+   blocks come back bare, so there would be nothing to check a later free
+   against. Stubs use malloc and free, which the sanitizer checks (D5). */
 
 /* D12's root interface. */
 FIDES_SELF(caml_checked_roots_mark)
