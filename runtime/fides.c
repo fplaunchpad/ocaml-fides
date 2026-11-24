@@ -329,6 +329,11 @@ void *__fides_check_store(void *p, size_t n, const char *site)
 /* ---------------------------------------------------------------------- */
 /* halloc / hfree (model §D.4.2)                                          */
 
+/* The allocator takes and returns tagged pointers, like the C API wrappers,
+   so it sits in their section: an indirect call to it (a pointer from
+   dlsym("free"), D19) keeps its pointer arguments tagged. */
+#define FIDES_WRAP_SECTION __attribute__((section("fides_wrap_text")))
+
 /* malloc, retrying until the block does not cross a 2^40 boundary. A
    rejected block is kept (never freed), so the retry gets another one. */
 static void *heap_alloc(size_t n, int zero)
@@ -342,14 +347,14 @@ static void *heap_alloc(size_t n, int zero)
   return p;
 }
 
-void *__fides_malloc(size_t n)
+FIDES_WRAP_SECTION void *__fides_malloc(size_t n)
 {
   void *p = heap_alloc(n, 0);
   if (p == NULL) return NULL;
   return (void *)caml_fides_mint((uintptr_t)p, n, FIDES_KIND_C_HEAP);
 }
 
-void *__fides_calloc(size_t nmemb, size_t size)
+FIDES_WRAP_SECTION void *__fides_calloc(size_t nmemb, size_t size)
 {
   if (size != 0 && nmemb > SIZE_MAX / size) {
     errno = ENOMEM;
@@ -379,7 +384,7 @@ static struct fides_entry *free_check(uintptr_t w, const char *action)
   return e;
 }
 
-void __fides_free(void *p)
+FIDES_WRAP_SECTION void __fides_free(void *p)
 {
   if (p == NULL) return;              /* free(NULL) frees nothing (D5) */
   uintptr_t w = (uintptr_t)p;
@@ -392,7 +397,7 @@ void __fides_free(void *p)
   if (heap) free(base);
 }
 
-void *__fides_realloc(void *p, size_t n)
+FIDES_WRAP_SECTION void *__fides_realloc(void *p, size_t n)
 {
   if (p == NULL) return __fides_malloc(n);
   uintptr_t w = (uintptr_t)p;
@@ -511,7 +516,7 @@ void *__fides_global(void *addr, size_t n)
   return (void *)caml_fides_mint((uintptr_t)addr, n, FIDES_KIND_C_GLOBAL);
 }
 
-int *__fides_errno_location(void)
+FIDES_WRAP_SECTION int *__fides_errno_location(void)
 {
   static uintptr_t w;
   if (w == 0)

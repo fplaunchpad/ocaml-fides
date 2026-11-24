@@ -175,6 +175,12 @@ int *__fides_errno_location(void);
    Inserted by the pass at every indirect call (runtime/fides_api.c). */
 void *__fides_wrapper_for(void *fn);
 
+/* Stage 4 (D19): dlsym and dlvsym as sanitized C sees them (the pass
+   redirects them): results are mapped to wrappers and checked versions, and
+   runtime functions sanitized C may not call read as absent (NULL). */
+void *__fides_dlsym(void *handle, const char *name);
+void *__fides_dlvsym(void *handle, const char *name, const char *version);
+
 /* Mint an entry; used by the runtime for promotion. Traps metaTableFull. */
 uintptr_t caml_fides_mint(uintptr_t base, uintptr_t size, enum fides_kind kind);
 /* Zero the entry a word names, if that word still validates against it. */

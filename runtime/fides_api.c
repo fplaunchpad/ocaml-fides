@@ -26,6 +26,7 @@
    the obligation sits in trusted code at the entry of the service. */
 
 #define CAML_INTERNALS
+#define _GNU_SOURCE                      /* dlvsym, RTLD_NEXT */
 
 #include "caml/mlvalues.h"
 #include "caml/memory.h"
@@ -36,6 +37,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <dlfcn.h>
 #include "caml/fides_ffi.h"
 #include "caml/fides.h"
 
@@ -734,7 +737,9 @@ static void init_lookup(void)
   qsort(denied, denied_n, sizeof *denied, cmp_ptr);
 }
 
-void *__fides_wrapper_for(void *fn)
+/* The wrapper of [fn], [fn] itself, or NULL if [fn] is a runtime function
+   sanitized C may not call. */
+static void *settle(void *fn)
 {
   char *p = fn;
   if (caml_fides_in_sanitized_c(fn)
@@ -751,8 +756,81 @@ void *__fides_wrapper_for(void *fn)
   }
   const void *key = fn;
   if (bsearch(&key, denied, denied_n, sizeof *denied, cmp_ptr) != NULL)
+    return NULL;
+  return fn;
+}
+
+void *__fides_wrapper_for(void *fn)
+{
+  void *t = settle(fn);
+  if (t == NULL && fn != NULL)
     caml_fides_trap(FIDES_RUNTIME_NOT_WRAPPED,
                     "call an OCaml runtime function through a pointer",
                     (uintptr_t)fn, 0, NULL);
-  return fn;
+  return t;
+}
+
+/* ---------------------------------------------------------------------- */
+/* dlsym (D19)                                                            */
+
+/* A dlsym result may be called by sanitized C (the lookup above settles
+   it) or handed to uninstrumented code, where no lookup runs. So it is
+   settled here, when it is looked up: a C API function gives its wrapper,
+   the stock root functions their checked versions, the allocator the
+   sanitizer's. A runtime function sanitized C may not call gives a trampoline
+   that traps runtimeNotWrapped whenever it is called, by anyone: the symbol
+   still exists, as in a plain build, and no caller reaches the real
+   function. The sanitizer's own helpers give NULL (they are hidden, so a
+   plain build finds none either).
+   The handle (RTLD_DEFAULT, RTLD_NEXT, or a dlopen result) is passed as is;
+   the name is read through the load check. Every caller is in the
+   executable, so RTLD_NEXT means the same here as in the stub. */
+static const struct { const char *name; void *replacement; } dl_map[] = {
+  { "caml_register_global_root", (void *)caml_checked_register_global_root },
+  { "caml_remove_global_root", (void *)caml_checked_remove_global_root },
+  { "caml_register_generational_global_root",
+    (void *)caml_checked_register_generational_global_root },
+  { "caml_remove_generational_global_root",
+    (void *)caml_checked_remove_generational_global_root },
+  { "caml_modify_generational_global_root",
+    (void *)caml_checked_modify_generational_global_root },
+  { "malloc", (void *)__fides_malloc },
+  { "calloc", (void *)__fides_calloc },
+  { "realloc", (void *)__fides_realloc },
+  { "free", (void *)__fides_free },
+  { "__errno_location", (void *)__fides_errno_location },
+};
+
+/* Called in place of a refused runtime function: whatever its signature,
+   it never returns. In the wrappers' section, so an indirect call from
+   sanitized C reaches it unchanged. */
+WRAPPER CAMLnoret static void refused_runtime_function(void)
+{
+  caml_fides_trap(FIDES_RUNTIME_NOT_WRAPPED,
+                  "call an OCaml runtime function looked up with dlsym",
+                  0, 0, NULL);
+}
+
+static void *dl_settle(void *r, const char *name)
+{
+  if (r == NULL) return NULL;
+  if (strncmp(name, "__fides_", 8) == 0 || strncmp(name, "caml_fides_", 11) == 0)
+    return NULL;
+  for (size_t k = 0; k < sizeof dl_map / sizeof dl_map[0]; k++)
+    if (strcmp(name, dl_map[k].name) == 0) return dl_map[k].replacement;
+  void *t = settle(r);
+  return t != NULL ? t : (void *)refused_runtime_function;
+}
+
+void *__fides_dlsym(void *handle, const char *name)
+{
+  const char *n = caml_fides_load_arg(name, "pass a pointer to dlsym");
+  return dl_settle(dlsym(handle, n), n);
+}
+
+void *__fides_dlvsym(void *handle, const char *name, const char *version)
+{
+  const char *n = caml_fides_load_arg(name, "pass a pointer to dlvsym");
+  const char *v = caml_fides_load_arg(version, "pass a pointer to dlvsym");
+  return dl_settle(dlvsym(handle, n, v), n);
 }
